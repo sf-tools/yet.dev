@@ -22,6 +22,9 @@ if (!process.stdin.isTTY || !process.stdout.isTTY) {
 const { runOpenAILoginScreen } = await import('@/auth/onboarding');
 if (!await runOpenAILoginScreen()) process.exit(0);
 
+const { refreshOpenAIModelAccess } = await import('@/auth/models');
+await refreshOpenAIModelAccess();
+
 let resumeId: string | undefined;
 let initialComposer: string | undefined;
 if (cli.resume) {

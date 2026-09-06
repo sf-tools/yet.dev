@@ -1,4 +1,5 @@
 import OpenAI from 'openai';
+import type { Reasoning } from 'openai/resources/shared';
 import type {
   EasyInputMessage,
   FunctionTool,
@@ -214,7 +215,8 @@ export async function streamOpenAIResponse(options: StreamStepOptions): Promise<
       input,
       tools: serializeOpenAIResponseTools(options.tools),
       parallel_tool_calls: false,
-      reasoning: reasoning(options.thinkingMode),
+      // The catalog supports ultra before the installed SDK's effort union does.
+      reasoning: reasoning(options.thinkingMode) as Reasoning,
       ...(options.fastModeEnabled ? { service_tier: 'priority' as const } : {}),
       store: options.store ?? true,
       stream: true,

@@ -1,6 +1,6 @@
 export const DEFAULT_MODEL = 'gpt-5.6-sol';
 
-export type ThinkingMode = 'auto' | 'none' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+export type ThinkingMode = 'auto' | 'none' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra';
 
 export type OpenAIModelOption = {
   id: string;
@@ -9,12 +9,22 @@ export type OpenAIModelOption = {
   description: string;
   contextWindow: number;
   efforts: ThinkingMode[];
+  requiresAccountSupport?: boolean;
 };
 
 const STANDARD_EFFORTS: ThinkingMode[] = ['auto', 'none', 'low', 'medium', 'high', 'xhigh'];
 const FRONTIER_EFFORTS: ThinkingMode[] = [...STANDARD_EFFORTS, 'max'];
 
 export const OPENAI_MODEL_OPTIONS: OpenAIModelOption[] = [
+  {
+    id: 'gpt-6-astra',
+    providerId: 'gpt-6-astra',
+    label: 'gpt-6-astra',
+    description: 'Our most capable model for complex, demanding work.',
+    contextWindow: 272_000,
+    efforts: ['auto', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
+    requiresAccountSupport: true,
+  },
   {
     id: 'gpt-5.6-sol',
     providerId: 'gpt-5.6-sol',
@@ -42,6 +52,7 @@ export const OPENAI_MODEL_OPTIONS: OpenAIModelOption[] = [
   {
     id: 'gpt-daybreak-blue-latest',
     providerId: 'daybreak-blue-latest',
+    requiresAccountSupport: true,
     label: 'gpt-daybreak-blue-latest',
     description: 'Latest frontier agentic coding model for broad defensive cybersecurity work.',
     contextWindow: 1_050_000,
@@ -129,7 +140,8 @@ export function isThinkingMode(value: unknown): value is ThinkingMode {
     value === 'medium' ||
     value === 'high' ||
     value === 'xhigh' ||
-    value === 'max'
+    value === 'max' ||
+    value === 'ultra'
   );
 }
 
@@ -159,5 +171,7 @@ export function getThinkingModeDescription(thinkingMode: ThinkingMode) {
       return 'Extra-high reasoning for complex work';
     case 'max':
       return 'Maximum supported reasoning effort';
+    case 'ultra':
+      return 'Maximum reasoning with automatic task delegation';
   }
 }

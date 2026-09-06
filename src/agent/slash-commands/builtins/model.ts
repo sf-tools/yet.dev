@@ -1,7 +1,7 @@
+import { getAvailableOpenAIModels } from '@/auth/models';
 import approx from 'approximate-number';
 
 import {
-  OPENAI_MODEL_OPTIONS,
   getOpenAIContextWindow,
   getOpenAIModelDescription,
   getOpenAIModelDisplayName,
@@ -11,7 +11,7 @@ import type { SlashCommand } from '../types';
 
 function findModel(value: string) {
   const normalized = normalizeOpenAIModelId(value);
-  return OPENAI_MODEL_OPTIONS.find(option => option.id === normalized);
+  return getAvailableOpenAIModels().find(option => option.id === normalized);
 }
 
 function formatContextWindow(contextWindow?: number | null) {
@@ -23,7 +23,7 @@ function truncateDescription(text: string | null, maxLength = 58) {
   return text.length <= maxLength ? text : `${text.slice(0, maxLength - 1).trimEnd()}…`;
 }
 
-const MODEL_ARGUMENT_SUGGESTIONS = OPENAI_MODEL_OPTIONS.map(option => ({
+const modelArgumentSuggestions = () => getAvailableOpenAIModels().map(option => ({
   value: option.id,
   label: getOpenAIModelDisplayName(option.id),
   detail: [
@@ -37,7 +37,7 @@ const MODEL_ARGUMENT_SUGGESTIONS = OPENAI_MODEL_OPTIONS.map(option => ({
 export const modelSlashCommand: SlashCommand = {
   name: 'model',
   description: 'Switch the active model.',
-  argumentSuggestions: MODEL_ARGUMENT_SUGGESTIONS,
+  argumentSuggestions: modelArgumentSuggestions,
   showArgumentSuggestionsOnExactInvocation: true,
   execute({ openCommandArgumentPicker, setCurrentModel, showFooterNotice }, args) {
     if (args.argv.length > 1) throw new Error(`/${args.invocation} accepts at most one argument`);

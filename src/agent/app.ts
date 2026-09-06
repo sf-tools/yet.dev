@@ -1,3 +1,4 @@
+import { refreshOpenAIModelAccess, resetOpenAIModelAccess } from '@/auth/models';
 import { createTheme } from '@/theme';
 import {
   createToolRegistry,
@@ -3319,10 +3320,12 @@ export class AgentApp {
       loginOpenAIWithApiKey: async apiKey => {
         await loginOpenAIWithApiKey(apiKey);
         resetOpenAIClient();
+        await refreshOpenAIModelAccess();
       },
       loginOpenAIWithBrowser: async onProgress => {
         const auth = await loginOpenAIWithBrowser({ onProgress });
         resetOpenAIClient();
+        await refreshOpenAIModelAccess();
         return {
           method: 'oauth' as const,
           ...(auth.email ? { email: auth.email } : {}),
@@ -3330,6 +3333,7 @@ export class AgentApp {
         };
       },
       logoutOpenAI: async () => {
+        resetOpenAIModelAccess();
         const result = await logoutOpenAI();
         resetOpenAIClient();
         return result;

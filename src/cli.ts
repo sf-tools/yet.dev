@@ -1,3 +1,4 @@
+import { getAvailableOpenAIModels } from '@/auth/models';
 import { stderr, stdout } from 'node:process';
 import chalk from 'chalk';
 
@@ -6,7 +7,6 @@ import {
   APP_RELEASE_UNIX_TIME,
   APP_VERSION,
   DEFAULT_MODEL,
-  OPENAI_MODEL_OPTIONS,
   getSupportedThinkingModes,
   isSupportedOpenAIModel,
   isThinkingMode,
@@ -59,7 +59,7 @@ function printVersion() {
 }
 
 function printHelp() {
-  const models = OPENAI_MODEL_OPTIONS.map((model, index) => [
+  const models = getAvailableOpenAIModels().map((model, index) => [
     `${index + 1}. ${model.id}${model.id === DEFAULT_MODEL ? ' (default)' : ''}`,
     model.description,
   ] as [string, string]);
@@ -84,7 +84,7 @@ function printHelp() {
       ['-h, --help', 'Show help'],
       ['-v, --version', 'Show version'],
       ['-m, --model <id>', 'Select one of the supported models below'],
-      ['--effort <level>', 'Set reasoning effort: auto, none, low, medium, high, xhigh, max'],
+      ['--effort <level>', 'Set reasoning effort: auto, none, low, medium, high, xhigh, max, ultra'],
       ['--permissions <mode>', 'Set permissions for this run: ask, auto, full'],
       ['--yolo', 'Run with Full Access; bypass approvals and the workspace sandbox'],
     ]),

@@ -102,7 +102,7 @@ const spacedModelSuggestions = suggestionRegistry.listSuggestions({
   invocation: 'model',
   query: '',
 });
-equal(modelSuggestions.length, 8, '/model shows every supported model');
+equal(modelSuggestions.length, 7, '/model hides account-gated models until access is confirmed');
 equal(
   spacedModelSuggestions.length,
   modelSuggestions.length,

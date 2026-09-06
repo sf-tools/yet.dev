@@ -1,6 +1,7 @@
 import chalk from 'chalk';
 
 import {
+  DEFAULT_MODEL,
   formatThinkingMode,
   getSupportedThinkingModes,
   getThinkingModeDescription,
@@ -17,6 +18,7 @@ const ARGUMENT_SUGGESTIONS: ThinkingMode[] = [
   'high',
   'xhigh',
   'max',
+  'ultra',
 ];
 
 function isThinkingMode(value: string): value is ThinkingMode {
@@ -37,6 +39,7 @@ function thinkingModeStyle(mode: ThinkingMode) {
       return chalk.redBright;
     case 'xhigh':
       return chalk.magentaBright;
+    case 'ultra':
     case 'max':
       return chalk.redBright.bold;
   }
@@ -53,7 +56,9 @@ export const effortSlashCommand: SlashCommand = {
   name: 'effort',
   description: 'Set model reasoning effort. Shift+Tab also cycles it.',
   suggestedInput: 'high',
-  argumentSuggestions: EFFORT_ARGUMENT_SUGGESTIONS,
+  argumentSuggestions: ({ getCurrentModel }) => EFFORT_ARGUMENT_SUGGESTIONS.filter(
+    option => getSupportedThinkingModes(getCurrentModel() || DEFAULT_MODEL).includes(option.value),
+  ),
   showArgumentSuggestionsOnExactInvocation: true,
   execute({ store, openCommandArgumentPicker, setThinkingMode, showFooterNotice }, args) {
     if (args.argv.length > 1) throw new Error(`/${args.invocation} accepts at most one argument`);
