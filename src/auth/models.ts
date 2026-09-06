@@ -1,53 +1,170 @@
-import { OPENAI_MODEL_OPTIONS } from '@/config/models';
+import { createHash, randomBytes } from 'node:crypto';
+import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
+import {
+  OPENAI_MODEL_OPTIONS,
+  isThinkingMode,
+  setOpenAIModelCatalog,
+  type OpenAIModelOption,
+  type ThinkingMode,
+} from '@/config/models';
 import { resolveOpenAIConnection } from './openai';
+import { loadStoredOpenAIAuth, YET_AUTH_PATH } from './storage';
+import type { StoredOpenAIAuth } from './types';
 
-// Astra's minimum catalog client version in the Codex reference checkout.
+export { getAvailableOpenAIModels } from '@/config/models';
+
+// Match the Astra-compatible Codex catalog and its five-minute cache TTL.
 const CODEX_MODELS_CLIENT_VERSION = '0.153.0';
-let accountModelIds = new Set<string>();
-let refreshGeneration = 0;
+const CACHE_TTL_MS = 5 * 60_000;
+type CatalogOptions = Parameters<typeof resolveOpenAIConnection>[0];
+type CacheEntry = {
+  version: 1;
+  clientVersion: string;
+  accountKey: string;
+  fetchedAt: number;
+  codex: boolean;
+  models: unknown[];
+};
+let accountKey: string | null = null;
+let fetchedAt = 0;
+let generation = 0;
 
-export function getAvailableOpenAIModels() {
-  return OPENAI_MODEL_OPTIONS.filter(option =>
-    !option.requiresAccountSupport ||
-    accountModelIds.has(option.id) || accountModelIds.has(option.providerId),
-  );
+function identity(auth: StoredOpenAIAuth) {
+  // OAuth access tokens rotate; the user and selected workspace do not.
+  let subject = '';
+  if (auth.method === 'oauth') {
+    try {
+      const claims = JSON.parse(Buffer.from(auth.idToken.split('.')[1] ?? '', 'base64url').toString());
+      if (typeof claims.sub === 'string') subject = claims.sub;
+    } catch {}
+  }
+  return createHash('sha256').update(JSON.stringify(auth.method === 'api-key'
+    ? ['api-key', auth.apiKey]
+    : ['oauth', auth.accountId, subject || auth.email || '', Boolean(auth.fedramp)],
+  )).digest('hex');
+}
+
+function cachePath(key: string, options: CatalogOptions = {}) {
+  return join(dirname(options.authPath ?? YET_AUTH_PATH), 'models-cache', `${key}.json`);
+}
+
+function parseCatalog(models: unknown, codex: boolean): OpenAIModelOption[] | null {
+  if (!Array.isArray(models)) return null;
+  const result: OpenAIModelOption[] = [];
+  for (const value of models) {
+    if (!value || typeof value !== 'object') return null;
+    const model = value as Record<string, unknown>;
+    const id = codex ? model.slug : model.id;
+    if (typeof id !== 'string' || !id.trim()) return null;
+    const known = OPENAI_MODEL_OPTIONS.find(option => option.id === id || option.providerId === id);
+    const efforts: ThinkingMode[] = ['auto'];
+    if (Array.isArray(model.supported_reasoning_levels)) {
+      for (const level of model.supported_reasoning_levels) {
+        if (level && isThinkingMode(level.effort) && !efforts.includes(level.effort)) efforts.push(level.effort);
+      }
+    } else if (known) efforts.push(...known.efforts.filter(effort => effort !== 'auto'));
+    result.push({
+      id: known?.id ?? id,
+      providerId: id,
+      label: typeof model.display_name === 'string' ? model.display_name : known?.label ?? id,
+      description: typeof model.description === 'string' ? model.description : known?.description ?? '',
+      contextWindow: typeof model.context_window === 'number' && model.context_window > 0
+        ? model.context_window : known?.contextWindow ?? null,
+      efforts,
+      showInPicker: !codex || model.visibility === 'list',
+    });
+  }
+  return result;
 }
 
 export function resetOpenAIModelAccess() {
-  refreshGeneration += 1;
-  accountModelIds = new Set();
+  generation += 1;
+  accountKey = null;
+  fetchedAt = 0;
+  setOpenAIModelCatalog(null);
 }
 
-export async function refreshOpenAIModelAccess(
-  options: Parameters<typeof resolveOpenAIConnection>[0] = {},
-) {
+// Local disk only: this must never refresh OAuth tokens or wait for the network.
+export async function loadOpenAIModelCache(options: CatalogOptions = {}) {
   resetOpenAIModelAccess();
-  const generation = refreshGeneration;
+  const current = generation;
   try {
+    const auth = await loadStoredOpenAIAuth(options.authPath);
+    if (!auth || current !== generation) return;
+    const key = identity(auth);
+    accountKey = key;
+    const entry = JSON.parse(await readFile(cachePath(key, options), 'utf8')) as CacheEntry;
+    if (current !== generation || entry.version !== 1 || entry.accountKey !== key ||
+      entry.clientVersion !== CODEX_MODELS_CLIENT_VERSION ||
+      entry.codex !== (auth.method === 'oauth') ||
+      !Number.isFinite(entry.fetchedAt) || entry.fetchedAt > Date.now()) return;
+    const catalog = parseCatalog(entry.models, entry.codex);
+    if (!catalog) return;
+    fetchedAt = entry.fetchedAt;
+    setOpenAIModelCatalog(catalog);
+  } catch {
+    // Missing/corrupt caches use the bundled fallback until discovery finishes.
+  }
+}
+
+export async function refreshOpenAIModelAccess(options: CatalogOptions = {}) {
+  const current = generation;
+  let temporaryPath: string | undefined;
+  try {
+    const auth = await loadStoredOpenAIAuth(options.authPath);
+    if (!auth || current !== generation) return;
+    const key = identity(auth);
+    if (accountKey !== key) {
+      await loadOpenAIModelCache(options);
+      if (accountKey !== key) return;
+      return refreshOpenAIModelAccess(options);
+    }
+    if (fetchedAt && Date.now() - fetchedAt < CACHE_TTL_MS) return;
     const connection = await resolveOpenAIConnection(options);
-    const codex = Boolean(connection.baseURL);
+    if (current !== generation) return;
+    const codex = auth.method === 'oauth';
     const baseURL = connection.baseURL ?? 'https://api.openai.com/v1';
     const url = `${baseURL}/models${codex ? `?client_version=${CODEX_MODELS_CLIENT_VERSION}` : ''}`;
     const response = await (options.fetch ?? fetch)(url, {
-      headers: {
-        authorization: `Bearer ${connection.apiKey}`,
-        ...connection.defaultHeaders,
-      },
+      headers: { authorization: `Bearer ${connection.apiKey}`, ...connection.defaultHeaders },
       signal: AbortSignal.timeout(5_000),
     });
+    if (current !== generation) return;
+    if (response.status === 401 || response.status === 403) {
+      setOpenAIModelCatalog([]);
+      fetchedAt = 0;
+      await rm(cachePath(key, options), { force: true });
+      return;
+    }
     if (!response.ok) return;
     const body = await response.json();
     const models = codex ? body?.models : body?.data;
-    if (!Array.isArray(models)) return;
-    const ids = models.flatMap(model => {
-      if (!model || typeof model !== 'object') return [];
-      // Hidden Codex entries are not offered in its model picker either.
-      if (codex && model.visibility !== 'list') return [];
-      const id = codex ? model.slug : model.id;
-      return typeof id === 'string' ? [id] : [];
-    });
-    if (generation === refreshGeneration) accountModelIds = new Set(ids);
+    const catalog = parseCatalog(models, codex);
+    if (!catalog || current !== generation) return;
+    const entry: CacheEntry = {
+      version: 1, clientVersion: CODEX_MODELS_CLIENT_VERSION, accountKey: key,
+      fetchedAt: Date.now(), codex,
+      // Keep startup reads small: omit the catalog's large system prompts.
+      models: catalog.map(model => ({
+        ...(codex ? { slug: model.providerId } : { id: model.providerId }),
+        display_name: model.label,
+        description: model.description,
+        context_window: model.contextWindow,
+        supported_reasoning_levels: model.efforts.filter(effort => effort !== 'auto').map(effort => ({ effort })),
+        visibility: model.showInPicker ? 'list' : 'hide',
+      })),
+    };
+    fetchedAt = entry.fetchedAt;
+    setOpenAIModelCatalog(catalog);
+    const path = cachePath(key, options);
+    await mkdir(dirname(path), { recursive: true, mode: 0o700 });
+    temporaryPath = `${path}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`;
+    await writeFile(temporaryPath, JSON.stringify(entry), { mode: 0o600, flag: 'wx' });
+    if (current === generation) await rename(temporaryPath, path);
   } catch {
-    // Without confirmation from the current account, gated models stay hidden.
+    // A transient failure keeps the current account's cached catalog usable.
+  } finally {
+    if (temporaryPath) await rm(temporaryPath, { force: true }).catch(() => {});
   }
 }

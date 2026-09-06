@@ -1,4 +1,4 @@
-import { refreshOpenAIModelAccess, resetOpenAIModelAccess } from '@/auth/models';
+import { loadOpenAIModelCache, refreshOpenAIModelAccess, resetOpenAIModelAccess } from '@/auth/models';
 import { createTheme } from '@/theme';
 import {
   createToolRegistry,
@@ -806,6 +806,7 @@ export class AgentApp {
     process.stdout.on('resize', this.render);
 
     this.render();
+    this.refreshModelCatalog();
     if (!this.bootFromSnapshot) {
       const preloadTimer = setTimeout(() => {
         void preloadSyntaxLanguages({ incremental: true }).catch(error => this.handleFatalError(error));
@@ -818,6 +819,14 @@ export class AgentApp {
       this.enqueueGoalContinuation();
       void this.drainQueuedSubmissions();
     }
+  }
+
+  private refreshModelCatalog() {
+    void refreshOpenAIModelAccess().then(() => {
+      if (this.state.closed) return;
+      this.store.resetSelectedSuggestion();
+      this.scheduleRender();
+    });
   }
 
   private async attachCollaborationRoot() {
@@ -3320,12 +3329,14 @@ export class AgentApp {
       loginOpenAIWithApiKey: async apiKey => {
         await loginOpenAIWithApiKey(apiKey);
         resetOpenAIClient();
-        await refreshOpenAIModelAccess();
+        await loadOpenAIModelCache();
+        this.refreshModelCatalog();
       },
       loginOpenAIWithBrowser: async onProgress => {
         const auth = await loginOpenAIWithBrowser({ onProgress });
         resetOpenAIClient();
-        await refreshOpenAIModelAccess();
+        await loadOpenAIModelCache();
+        this.refreshModelCatalog();
         return {
           method: 'oauth' as const,
           ...(auth.email ? { email: auth.email } : {}),

@@ -1,4 +1,7 @@
 import { handleCliArgs } from '@/cli';
+import { loadOpenAIModelCache } from '@/auth/models';
+
+await loadOpenAIModelCache();
 
 const cli = handleCliArgs();
 if (cli.kind === 'exit') process.exit(cli.code);
@@ -22,8 +25,7 @@ if (!process.stdin.isTTY || !process.stdout.isTTY) {
 const { runOpenAILoginScreen } = await import('@/auth/onboarding');
 if (!await runOpenAILoginScreen()) process.exit(0);
 
-const { refreshOpenAIModelAccess } = await import('@/auth/models');
-await refreshOpenAIModelAccess();
+await loadOpenAIModelCache();
 
 let resumeId: string | undefined;
 let initialComposer: string | undefined;

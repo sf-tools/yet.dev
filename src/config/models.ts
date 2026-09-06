@@ -7,9 +7,10 @@ export type OpenAIModelOption = {
   providerId: string;
   label: string;
   description: string;
-  contextWindow: number;
+  contextWindow: number | null;
   efforts: ThinkingMode[];
   requiresAccountSupport?: boolean;
+  showInPicker?: boolean;
 };
 
 const STANDARD_EFFORTS: ThinkingMode[] = ['auto', 'none', 'low', 'medium', 'high', 'xhigh'];
@@ -93,13 +94,27 @@ export const OPENAI_MODEL_OPTIONS: OpenAIModelOption[] = [
 ];
 
 const MODEL_OPTION_MAP = new Map(OPENAI_MODEL_OPTIONS.map(option => [option.id, option]));
+let accountCatalog: OpenAIModelOption[] | null = null;
+let accountModelMap = new Map<string, OpenAIModelOption>();
+
+export function setOpenAIModelCatalog(models: OpenAIModelOption[] | null) {
+  accountCatalog = models;
+  accountModelMap = new Map(models?.map(option => [option.id, option]));
+}
+
+export function getAvailableOpenAIModels() {
+  return accountCatalog
+    ? accountCatalog.filter(option => option.showInPicker !== false)
+    : OPENAI_MODEL_OPTIONS.filter(option => !option.requiresAccountSupport);
+}
 
 export function normalizeOpenAIModelId(model: string) {
   return model.trim().toLowerCase();
 }
 
 export function getKnownOpenAIModel(model: string) {
-  return MODEL_OPTION_MAP.get(normalizeOpenAIModelId(model));
+  const id = normalizeOpenAIModelId(model);
+  return accountModelMap.get(id) ?? MODEL_OPTION_MAP.get(id);
 }
 
 export function isSupportedOpenAIModel(model: string) {
