@@ -1,5 +1,6 @@
 import { loadOpenAIModelCache, refreshOpenAIModelAccess, resetOpenAIModelAccess } from '@/auth/models';
 import { createTheme } from '@/theme';
+import { playSound } from '@/sounds';
 import {
   createToolRegistry,
   type ScheduleLoopWakeupRequest,
@@ -253,6 +254,7 @@ type ActiveLoopRuntime = ActiveLoopSummary & {
 
 export class AgentApp {
   private readonly store: AgentStore;
+  private readonly playSound = playSound;
   private readonly theme = createTheme();
 
   private transientLineCount = 0;
@@ -711,7 +713,10 @@ export class AgentApp {
     });
     this.tools = createToolRegistry({
       workspaceRoot: process.cwd(),
-      execCommand: (command, execOptions) => this.backgroundTerminals.exec(command, execOptions),
+      execCommand: (command, execOptions) => {
+        this.playSound('chime');
+        return this.backgroundTerminals.exec(command, execOptions);
+      },
       writeStdin: (sessionId, chars, writeOptions) =>
         this.backgroundTerminals.write(sessionId, chars, writeOptions),
       authorize: (request, authorization) => this.authorizeTool(request, authorization),
@@ -807,6 +812,7 @@ export class AgentApp {
 
     this.render();
     this.refreshModelCatalog();
+    this.playSound('bloom');
     if (!this.bootFromSnapshot) {
       const preloadTimer = setTimeout(() => {
         void preloadSyntaxLanguages({ incremental: true }).catch(error => this.handleFatalError(error));
@@ -1029,6 +1035,7 @@ export class AgentApp {
   }
 
   handleFatalError(error: unknown, code = 1) {
+    this.playSound('error');
     this.clearTransientBlock();
     if (process.stdout.isTTY) process.stdout.write('\u001b[?25h');
     process.stderr.write(`${plain(error instanceof Error ? error.stack || error.message : String(error))}\n`);
@@ -1901,7 +1908,9 @@ export class AgentApp {
   }
 
   private setCurrentModel(model: string) {
+    const changed = model !== this.state.currentModel;
     this.store.setCurrentModel(model);
+    if (changed) this.playSound('scan');
     if (!getSupportedThinkingModes(model).includes(this.state.thinkingMode)) this.store.setThinkingMode('auto');
     this.store.resetLastUsage();
     this.syncRootAgentConfiguration();
@@ -2923,6 +2932,8 @@ export class AgentApp {
   }
 
   private persistHistoryEntries(entries: HistoryEntry[]) {
+    if (entries.some(entry => entry.type === 'entry' && entry.kind === EntryKind.Error))
+      this.playSound('error');
     for (const entry of entries) {
       this.store.pushHistoryEntry(entry);
       if (entry.type === 'tool') {
@@ -3128,12 +3139,14 @@ export class AgentApp {
       const profile = resolvePermissionProfile(this.state.permissionMode, {
         readOnly: this.state.planningMode,
       });
+      this.playSound('chime');
       const result = await runUserShell(cmd, {
         workspaceRoot: process.cwd(),
         cwd: process.cwd(),
         sandboxMode: profile.sandboxMode,
       });
       const trimmed = result.output.trimEnd();
+      if (result.exitCode !== 0) this.playSound('error');
 
       this.persistEntry(EntryKind.Shell, `${trimmedCommand} exit ${result.exitCode}`);
       if (trimmed) this.persistAnsi(trimmed);
@@ -3662,6 +3675,11 @@ export class AgentApp {
               break;
             }
             case 'tool-result': {
+              if (event.call.name === 'exec_command' || event.call.name === 'write_stdin') {
+                const output = JSON.parse(event.result.output);
+                if (output.error || (typeof output.exit_code === 'number' && output.exit_code !== 0))
+                  this.playSound('error');
+              }
               const part = {
                 toolCallId: event.call.id,
                 toolName: event.call.namespace
@@ -3688,6 +3706,7 @@ export class AgentApp {
               break;
             }
             case 'tool-error': {
+              this.playSound('error');
               const entry = createFailedToolEntry({
                 toolCallId: event.call.id,
                 toolName: event.call.namespace
@@ -3749,6 +3768,7 @@ export class AgentApp {
           : []),
       ]);
       completedSuccessfully = true;
+      if (result.text.trim()) this.playSound('success');
     } catch (error: unknown) {
       reasoningStream?.flush();
       assistantStream?.flush();

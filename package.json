@@ -44,7 +44,8 @@
     "openai": "^7.5.0",
     "prismjs": "^1.30.0",
     "yaml": "^2.9.0",
-    "fuzzysort": "^4.0.2"
+    "fuzzysort": "^4.0.2",
+    "string-width": "^8.2.2"
   },
   "devDependencies": {
     "@types/approximate-number": "^2.1.0",

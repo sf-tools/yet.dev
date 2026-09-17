@@ -69,7 +69,6 @@ export async function requestGeneratedThreadTitle(userMessage: string, signal?: 
     thinkingMode: 'low',
     messages: [{ role: 'user', content: createThreadTitlePrompt(userMessage) }],
     signal,
-    store: false,
     text: {
       format: {
         type: 'json_schema',

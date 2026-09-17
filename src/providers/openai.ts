@@ -1,4 +1,5 @@
 import OpenAI from 'openai';
+import { toResponseInputItems } from 'openai/lib/responses/ResponseInputItems';
 import type { Reasoning } from 'openai/resources/shared';
 import type {
   EasyInputMessage,
@@ -18,6 +19,7 @@ import {
   type ThinkingMode,
 } from '@/config';
 import type { Tool } from '@/tools';
+import { recordProviderError } from './diagnostics';
 
 export type ProviderToolCall = {
   id: string;
@@ -42,6 +44,7 @@ export type OpenAIResponseStep = {
   reasoning: string;
   toolCalls: ProviderToolCall[];
   usage: AgentUsage;
+  nextInput?: ResponseInputItem[];
 };
 
 type StreamStepOptions = {
@@ -50,12 +53,11 @@ type StreamStepOptions = {
   fastModeEnabled?: boolean;
   messages: AgentMessage[];
   tools: Tool[];
-  previousResponseId?: string;
+  previousInput?: ResponseInputItem[];
   toolOutputs?: ProviderToolOutput[];
   continuationMessages?: AgentChatMessage[];
   signal?: AbortSignal;
   text?: ResponseTextConfig;
-  store?: boolean;
   onEvent?: (event: ProviderEvent) => void;
 };
 
@@ -89,10 +91,12 @@ function textFromContent(content: AgentContent) {
 }
 
 function messageInput(message: AgentChatMessage): EasyInputMessage {
-  if (typeof message.content === 'string') return { role: message.role, content: message.content };
+  const phase = message.role === 'assistant' && message.phase ? { phase: message.phase } : {};
+  if (typeof message.content === 'string') return { role: message.role, content: message.content, ...phase };
 
   return {
     role: message.role,
+    ...phase,
     content: message.content.map(part =>
       part.type === 'text'
         ? ({ type: 'input_text', text: part.text } as const)
@@ -194,6 +198,21 @@ function errorFromEvent(event: ResponseStreamEvent) {
 }
 
 export async function streamOpenAIResponse(options: StreamStepOptions): Promise<OpenAIResponseStep> {
+  const openai = await getClient();
+  try {
+    return await streamResponse(openai, options);
+  } catch (error) {
+    if (options.signal?.aborted) throw error;
+    const message = await recordProviderError(error, {
+      endpoint: `${openai.baseURL.replace(/\/$/, '')}/responses`,
+      model: options.model,
+      secrets: [openai.apiKey],
+    });
+    throw new Error(message, { cause: error });
+  }
+}
+
+async function streamResponse(openai: OpenAI, options: StreamStepOptions): Promise<OpenAIResponseStep> {
   const { instructions, input: messageItems } = splitInstructions(options.messages);
   const toolOutputItems: ResponseInputItem[] = (options.toolOutputs ?? []).map(output => ({
     type: 'function_call_output',
@@ -204,10 +223,9 @@ export async function streamOpenAIResponse(options: StreamStepOptions): Promise<
   const continuationItems: ResponseInputItem[] = (options.continuationMessages ?? []).map(
     messageInput,
   );
-  const input: ResponseInputItem[] = options.previousResponseId
-    ? [...toolOutputItems, ...continuationItems]
+  const input: ResponseInputItem[] = options.previousInput
+    ? [...options.previousInput, ...toolOutputItems, ...continuationItems]
     : messageItems;
-  const openai = await getClient();
   const stream = await openai.responses.create(
     {
       model: getOpenAIProviderModelId(options.model),
@@ -218,12 +236,10 @@ export async function streamOpenAIResponse(options: StreamStepOptions): Promise<
       // The catalog supports ultra before the installed SDK's effort union does.
       reasoning: reasoning(options.thinkingMode) as Reasoning,
       ...(options.fastModeEnabled ? { service_tier: 'priority' as const } : {}),
-      store: options.store ?? true,
+      store: false,
+      include: ['reasoning.encrypted_content'],
       stream: true,
       ...(options.text ? { text: options.text } : {}),
-      ...(options.previousResponseId
-        ? { previous_response_id: options.previousResponseId }
-        : {}),
     },
     { signal: options.signal },
   );
@@ -281,6 +297,8 @@ export async function streamOpenAIResponse(options: StreamStepOptions): Promise<
 
   return {
     responseId: completed.id,
+    // Stateless HTTP continuations must replay output, including encrypted reasoning.
+    nextInput: [...input, ...toResponseInputItems(completed.output)],
     text,
     reasoning: reasoningText,
     toolCalls,
@@ -295,7 +313,6 @@ export async function generateOpenAIText(options: {
   messages: AgentMessage[];
   signal?: AbortSignal;
   text?: ResponseTextConfig;
-  store?: boolean;
 }) {
   const step = await streamOpenAIResponse({ ...options, tools: [] });
   return { text: step.text, usage: step.usage, responseId: step.responseId };
