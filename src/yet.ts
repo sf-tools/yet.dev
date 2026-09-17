@@ -7,8 +7,8 @@ const cli = handleCliArgs();
 if (cli.kind === 'exit') process.exit(cli.code);
 if (cli.kind === 'agents-daemon') {
   const { runAgentsDaemon } = await import('@/agent/daemon/server');
-  await runAgentsDaemon();
-  await new Promise<never>(() => {});
+  const daemon = await runAgentsDaemon();
+  await daemon.closed;
 } else if (cli.kind === 'agents') {
   const { runAgentsDashboard } = await import('@/agent/daemon/dashboard');
   await runAgentsDashboard();

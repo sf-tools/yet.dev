@@ -46,12 +46,23 @@ async function acquireDaemonLock(socketPath: string) {
   throw new Error('could not acquire the agents daemon lock');
 }
 
-export async function runAgentsDaemon(options: { yetHome?: string } = {}) {
+export async function runAgentsDaemon(options: { yetHome?: string; idleTimeoutMs?: number } = {}) {
   const socketPath = agentsSocketPath(options.yetHome);
   const roots = new Map<string, { snapshot: SharedRootSnapshot; socket: Socket }>();
   const pending = new Map<string, { requester: Socket; owner: Socket; originalRequestId: string }>();
   const connections = new Set<Socket>();
   let daemonLock: Awaited<ReturnType<typeof acquireDaemonLock>> = null;
+  let idleTimer: ReturnType<typeof setTimeout> | null = null;
+  let closing: Promise<void> | null = null;
+  let resolveClosed!: () => void;
+  const closed = new Promise<void>(resolve => { resolveClosed = resolve; });
+
+  function scheduleIdleShutdown() {
+    if (closing || connections.size > 0) return;
+    if (idleTimer) clearTimeout(idleTimer);
+    idleTimer = setTimeout(() => { void close(); }, options.idleTimeoutMs ?? 30_000);
+    idleTimer.unref?.();
+  }
 
   if (process.platform !== 'win32') {
     await mkdir(dirname(socketPath), { recursive: true });
@@ -61,6 +72,8 @@ export async function runAgentsDaemon(options: { yetHome?: string } = {}) {
   }
 
   const server = createServer(socket => {
+    if (idleTimer) clearTimeout(idleTimer);
+    idleTimer = null;
     connections.add(socket);
     let buffer = '';
     let registeredRootId: string | null = null;
@@ -118,6 +131,7 @@ export async function runAgentsDaemon(options: { yetHome?: string } = {}) {
     });
     socket.on('close', () => {
       connections.delete(socket);
+      scheduleIdleShutdown();
       if (registeredRootId && roots.get(registeredRootId)?.socket === socket) roots.delete(registeredRootId);
       for (const [id, request] of pending) {
         if (request.requester === socket) {
@@ -151,19 +165,24 @@ export async function runAgentsDaemon(options: { yetHome?: string } = {}) {
     throw error;
   }
   if (process.platform !== 'win32') await chmod(socketPath, 0o600).catch(() => {});
-  let closing: Promise<void> | null = null;
-  const close = () => {
+  function close() {
     if (closing) return closing;
+    if (idleTimer) clearTimeout(idleTimer);
+    idleTimer = null;
+    process.off('SIGTERM', onSignal);
+    process.off('SIGINT', onSignal);
     closing = (async () => {
       for (const socket of connections) socket.destroy();
       await new Promise<void>(resolve => server.close(() => resolve()));
       if (process.platform !== 'win32') await rm(socketPath, { force: true });
       await daemonLock?.handle.close().catch(() => {});
       if (daemonLock) await rm(daemonLock.lockPath, { force: true });
-    })();
+    })().finally(resolveClosed);
     return closing;
-  };
-  process.once('SIGTERM', () => { void close().finally(() => process.exit(0)); });
-  process.once('SIGINT', () => { void close().finally(() => process.exit(0)); });
-  return { server, close, socketPath };
+  }
+  function onSignal() { void close().finally(() => process.exit(0)); }
+  process.once('SIGTERM', onSignal);
+  process.once('SIGINT', onSignal);
+  scheduleIdleShutdown();
+  return { server, close, closed, socketPath };
 }

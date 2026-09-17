@@ -3676,9 +3676,11 @@ export class AgentApp {
             }
             case 'tool-result': {
               if (event.call.name === 'exec_command' || event.call.name === 'write_stdin') {
-                const output = JSON.parse(event.result.output);
-                if (output.error || (typeof output.exit_code === 'number' && output.exit_code !== 0))
-                  this.playSound('error');
+                try {
+                  const output = JSON.parse(event.result.output);
+                  if (output?.error || (typeof output?.exit_code === 'number' && output.exit_code !== 0))
+                    this.playSound('error');
+                } catch {}
               }
               const part = {
                 toolCallId: event.call.id,

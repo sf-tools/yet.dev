@@ -9,6 +9,7 @@ import {
 } from './messages';
 import {
   streamOpenAIResponse,
+  OpenAIResponseSession,
   type OpenAIResponseStep,
   type ProviderToolCall,
   type ProviderToolOutput,
@@ -58,7 +59,17 @@ function toolOutput(value: unknown) {
 }
 
 export async function runAgentLoop(options: RunAgentLoopOptions): Promise<AgentLoopResult> {
+  const session = new OpenAIResponseSession();
+  try {
+    return await runAgentTurn(options, session);
+  } finally {
+    session.close();
+  }
+}
+
+async function runAgentTurn(options: RunAgentLoopOptions, session: OpenAIResponseSession): Promise<AgentLoopResult> {
   let previousInput: OpenAIResponseStep['nextInput'];
+  let previousResponseId: string | undefined;
   let pendingOutputs: ProviderToolOutput[] | undefined;
   let continuationMessages: AgentChatMessage[] | undefined;
   let accumulatedText = '';
@@ -90,6 +101,8 @@ export async function runAgentLoop(options: RunAgentLoopOptions): Promise<AgentL
       messages: runtimeMessages,
       tools: options.tools.list(),
       previousInput,
+      previousResponseId,
+      session,
       toolOutputs: pendingOutputs,
       continuationMessages,
       signal: options.signal,
@@ -98,6 +111,7 @@ export async function runAgentLoop(options: RunAgentLoopOptions): Promise<AgentL
     options.signal?.throwIfAborted();
 
     previousInput = step.nextInput;
+    previousResponseId = step.responseId;
     accumulatedText += step.text;
     accumulatedReasoning += step.reasoning;
     accumulatedUsage = addUsage(accumulatedUsage, step.usage);

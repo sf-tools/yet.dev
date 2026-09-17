@@ -1,4 +1,4 @@
-import { appendFile, chmod, mkdir } from 'node:fs/promises';
+import { appendFileSync, chmodSync, mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { stripVTControlCharacters } from 'node:util';
@@ -40,9 +40,9 @@ export function providerErrorDetails(error: unknown, secrets: string[] = []): Er
   return details;
 }
 
-export async function recordProviderError(
+export function recordProviderError(
   error: unknown,
-  context: { endpoint: string; model: string; secrets?: string[] },
+  context: { endpoint: string; model: string; transport?: string; secrets?: string[] },
   logPath = join(homedir(), '.yet', 'logs', 'errors.jsonl'),
 ) {
   const details = providerErrorDetails(error, context.secrets);
@@ -52,19 +52,20 @@ export async function recordProviderError(
   const endpoint = new URL(context.endpoint);
   const record = error && typeof error === 'object' ? error as Record<string, unknown> : {};
   try {
-    await mkdir(dirname(logPath), { recursive: true, mode: 0o700 });
-    await chmod(dirname(logPath), 0o700);
-    await appendFile(logPath, `${JSON.stringify({
+    mkdirSync(dirname(logPath), { recursive: true, mode: 0o700 });
+    chmodSync(dirname(logPath), 0o700);
+    appendFileSync(logPath, `${JSON.stringify({
       time: new Date().toISOString(),
       operation: 'responses.create',
       endpoint: `${endpoint.origin}${endpoint.pathname}`,
       model: context.model,
+      ...(context.transport ? { transport: context.transport } : {}),
       runtime: { executable: process.execPath, versions: process.versions, platform: process.platform, arch: process.arch },
       ...(typeof record.status === 'number' ? { status: record.status } : {}),
       ...(typeof record.requestID === 'string' ? { requestId: record.requestID } : {}),
       errors: details,
     })}\n`, { mode: 0o600 });
-    await chmod(logPath, 0o600);
+    chmodSync(logPath, 0o600);
     return `${message}\nDiagnostics: ${logPath}`;
   } catch {
     // A logging failure must not hide the original provider failure.

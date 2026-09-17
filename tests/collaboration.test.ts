@@ -14,6 +14,8 @@ import { collaborationV2Fixture as fixture } from './fixtures/collaboration-v2';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { connect } from 'node:net';
+import { existsSync } from 'node:fs';
 import { AgentDaemonClient, listSharedAgents, sendSharedAgentCommand } from '@/agent/daemon/client';
 import { runAgentsDaemon } from '@/agent/daemon/server';
 
@@ -377,4 +379,27 @@ for (let attempt = 0; attempt < 30 && reconnectedRoots.length === 0; attempt += 
 equal(reconnectedRoots[0]?.rootId, 'daemon-root', 'a live root re-registers after the agents daemon restarts');
 daemonClient.close();
 await restartedDaemon.close();
+const idleDaemon = await runAgentsDaemon({ yetHome: daemonHome, idleTimeoutMs: 80 });
+const firstPeer = connect(idleDaemon.socketPath);
+await new Promise<void>((resolve, reject) => { firstPeer.once('connect', resolve); firstPeer.once('error', reject); });
+await new Promise(resolve => setTimeout(resolve, 120));
+check(idleDaemon.server.listening, 'connected clients keep the daemon alive beyond its idle timeout');
+firstPeer.destroy();
+await new Promise(resolve => setTimeout(resolve, 30));
+const returningPeer = connect(idleDaemon.socketPath);
+await new Promise<void>((resolve, reject) => { returningPeer.once('connect', resolve); returningPeer.once('error', reject); });
+await new Promise(resolve => setTimeout(resolve, 120));
+check(idleDaemon.server.listening, 'a returning client cancels the pending idle shutdown');
+returningPeer.destroy();
+const idleGuard = setTimeout(() => { throw new Error('daemon failed to stop while idle'); }, 2_000);
+await idleDaemon.closed;
+clearTimeout(idleGuard);
+check(!idleDaemon.server.listening, 'daemon closes after its last client disconnects');
+if (process.platform !== 'win32') {
+  check(!existsSync(idleDaemon.socketPath), 'idle shutdown removes the IPC socket');
+  check(!existsSync(`${idleDaemon.socketPath}.lock`), 'idle shutdown releases the daemon lock');
+}
+const emptyDaemon = await runAgentsDaemon({ yetHome: daemonHome, idleTimeoutMs: 30 });
+await emptyDaemon.closed;
+check(!emptyDaemon.server.listening, 'a daemon that never receives clients also shuts down');
 await rm(daemonHome, { recursive: true, force: true });

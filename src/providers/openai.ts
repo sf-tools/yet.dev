@@ -20,6 +20,8 @@ import {
 } from '@/config';
 import type { Tool } from '@/tools';
 import { recordProviderError } from './diagnostics';
+import { OpenAIResponseSession, type ResponsesRequest } from './responses-session';
+export { OpenAIResponseSession } from './responses-session';
 
 export type ProviderToolCall = {
   id: string;
@@ -54,6 +56,8 @@ type StreamStepOptions = {
   messages: AgentMessage[];
   tools: Tool[];
   previousInput?: ResponseInputItem[];
+  previousResponseId?: string;
+  session?: OpenAIResponseSession;
   toolOutputs?: ProviderToolOutput[];
   continuationMessages?: AgentChatMessage[];
   signal?: AbortSignal;
@@ -74,7 +78,7 @@ async function getClient() {
     });
     clientCacheKey = connection.cacheKey;
   }
-  return client;
+  return { client, headers: connection.defaultHeaders };
 }
 
 export function resetOpenAIClient() {
@@ -198,21 +202,22 @@ function errorFromEvent(event: ResponseStreamEvent) {
 }
 
 export async function streamOpenAIResponse(options: StreamStepOptions): Promise<OpenAIResponseStep> {
-  const openai = await getClient();
+  const { client: openai, headers } = await getClient();
   try {
-    return await streamResponse(openai, options);
+    return await streamOpenAIResponseWithClient(openai, options, headers);
   } catch (error) {
     if (options.signal?.aborted) throw error;
     const message = await recordProviderError(error, {
       endpoint: `${openai.baseURL.replace(/\/$/, '')}/responses`,
       model: options.model,
-      secrets: [openai.apiKey],
+      transport: options.session?.transport ?? 'http',
+      secrets: openai.apiKey ? [openai.apiKey] : [],
     });
     throw new Error(message, { cause: error });
   }
 }
 
-async function streamResponse(openai: OpenAI, options: StreamStepOptions): Promise<OpenAIResponseStep> {
+export async function streamOpenAIResponseWithClient(openai: OpenAI, options: StreamStepOptions, headers?: Record<string, string>): Promise<OpenAIResponseStep> {
   const { instructions, input: messageItems } = splitInstructions(options.messages);
   const toolOutputItems: ResponseInputItem[] = (options.toolOutputs ?? []).map(output => ({
     type: 'function_call_output',
@@ -226,8 +231,7 @@ async function streamResponse(openai: OpenAI, options: StreamStepOptions): Promi
   const input: ResponseInputItem[] = options.previousInput
     ? [...options.previousInput, ...toolOutputItems, ...continuationItems]
     : messageItems;
-  const stream = await openai.responses.create(
-    {
+  const request: ResponsesRequest = {
       model: getOpenAIProviderModelId(options.model),
       instructions,
       input,
@@ -238,11 +242,17 @@ async function streamResponse(openai: OpenAI, options: StreamStepOptions): Promi
       ...(options.fastModeEnabled ? { service_tier: 'priority' as const } : {}),
       store: false,
       include: ['reasoning.encrypted_content'],
-      stream: true,
       ...(options.text ? { text: options.text } : {}),
-    },
-    { signal: options.signal },
-  );
+  };
+  const stream = options.session
+    ? options.session.stream(openai, request, {
+        headers,
+        signal: options.signal,
+        ...(options.previousResponseId && options.previousInput ? {
+          continuation: { responseId: options.previousResponseId, input: [...toolOutputItems, ...continuationItems] },
+        } : {}),
+      })
+    : await openai.responses.create({ ...request, stream: true }, { signal: options.signal });
 
   let text = '';
   let reasoningText = '';
