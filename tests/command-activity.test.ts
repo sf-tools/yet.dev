@@ -38,6 +38,24 @@ const command = (id: string, cmd: string, status: ToolHistoryEntry['status'] = '
   type: 'tool', toolCallId: id, toolName: 'exec_command', input: { cmd },
   status, output: status === 'running' ? undefined : JSON.stringify({ output: `${id} output`, exit_code: exitCode }),
 });
+const filteredListing = command('filtered-list', "rg --files -g '!vendor/**' -g 'AGENTS*' -g '*README*'");
+for (const status of ['running', 'completed'] as const) {
+  const entry = { ...filteredListing, status, output: status === 'running' ? undefined : filteredListing.output };
+  const colorLevel = chalk.level;
+  chalk.level = 3;
+  try {
+    const output = serializeBlock(renderCommandActivity([entry], ctx)).join('\n');
+    const text = stripAnsi(output);
+    check(text.includes(`• ${status === 'running' ? 'Running' : 'Ran'} rg --files`), 'pathless listings use an ordinary command row');
+    check(!text.includes('List rg') && !text.includes('Explor'), 'pathless listings never use the full command as an exploration label');
+    check(output.includes(chalk.hex('#89b4fa')('rg')), 'pathless listings retain command syntax colors');
+    if (status === 'completed') check(text.includes('filtered-list output'), 'pathless listings retain their output preview');
+  } finally { chalk.level = colorLevel; }
+}
+const listingTranscript = serializeBlock(renderCommandActivity([filteredListing], ctx, { transcript: true })).join('\n');
+check(listingTranscript.includes('$ rg --files') && listingTranscript.includes('filtered-list output'), 'listing transcripts retain the full command and output');
+const querylessSearch = serializeBlock(renderCommandActivity([command('queryless', 'rg --hidden', 'running')], ctx)).join('\n');
+check(querylessSearch.includes('Running rg --hidden') && !querylessSearch.includes('Search rg'), 'searches without a query also use a command row instead of the raw-command label fallback');
 const entries = [
   command('setup', 'pwd && rg --files'),
   command('read', 'cat AGENTS.md; cat README.md'),
@@ -53,7 +71,7 @@ check(rendered.includes('List silver'), 'exploration uses Codex short display pa
 equal(rendered.split('• Explored').length - 1, 2, 'ordinary commands separate exploration groups');
 check(rendered.indexOf('Ran pwd') < rendered.indexOf('Read AGENTS') && rendered.indexOf('Search foo') < rendered.indexOf('Ran git') && rendered.indexOf('Ran git') < rendered.indexOf('List silver'), 'mixed command cells preserve execution order');
 check(!rendered.includes('Ran 6 commands'), 'mixed commands never collapse into a count');
-const running = serializeBlock(renderCommandActivity([entries[1], command('live', 'rg --files', 'running')], ctx)).join('\n');
+const running = serializeBlock(renderCommandActivity([entries[1], command('live', 'rg --files src', 'running')], ctx)).join('\n');
 check(running.includes('• Exploring') && running.includes('Read AGENTS.md, README.md'), 'live exploration extends its existing group');
 const failedRead = serializeBlock(renderCommandActivity([command('missing', 'cat missing', 'completed', 1)], ctx)).join('\n');
 check(failedRead.includes('Ran cat missing') && failedRead.includes('missing output'), 'failed reads retain their output');
@@ -89,3 +107,6 @@ internal.store.pushHistoryEntry(entries[4]);
 internal.flushCommittedHistory(ctx);
 equal(internal.committedHistoryCount, 4, 'a following ordinary command seals the exploration cell');
 check(stripAnsi(committed.join('\n')).includes('Read AGENTS.md, README.md'), 'committed exploration retains the combined read summary');
+internal.store.pushHistoryEntry(filteredListing);
+internal.flushCommittedHistory(ctx);
+equal(internal.committedHistoryCount, 5, 'pathless listings commit as ordinary commands while the turn is running');

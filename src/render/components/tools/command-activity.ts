@@ -57,11 +57,21 @@ function parseResult(entry: ToolHistoryEntry): CommandResult {
   return { output: raw.trimEnd() };
 }
 
+function hasExplorationLabel(command: ParsedCommand) {
+  // Full commands belong in the highlighted command row, not a summary label.
+  switch (command.type) {
+    case 'read': return true;
+    case 'list_files': return command.path !== null;
+    case 'search': return command.query !== null;
+    case 'unknown': return false;
+  }
+}
+
 export function isExplorationEntry(entry: ToolHistoryEntry) {
   if (entry.toolName !== 'exec_command' || entry.status === 'failed') return false;
   const result = parseResult(entry);
   return !result.error && (result.exitCode === undefined || result.exitCode === 0) &&
-    parseCommand(commandText(entry)).every(command => command.type !== 'unknown');
+    parseCommand(commandText(entry)).every(hasExplorationLabel);
 }
 
 function shellCommandLine(command: string, ctx: RenderContext, prefix: '$ ' | ''): Block {
@@ -304,7 +314,7 @@ export function renderCommandActivity(
       continue;
     }
     const command = commands[commandIndex++];
-    if (!options.showCommandSummaries && !command.failed && command.parsed.every(parsed => parsed.type !== 'unknown')) {
+    if (!options.showCommandSummaries && !command.failed && command.parsed.every(hasExplorationLabel)) {
       exploration.push(command);
     } else {
       flushExploration();
