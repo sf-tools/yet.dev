@@ -1,9 +1,10 @@
 import chalk from 'chalk';
 
 import { highlightedCodeBlock } from '@/render/markdown';
+import { wrapAnsiLine } from '@/render/ansi';
 import { indent, LEFT_MARGIN, wrapTextBlock } from '@/render/layout';
 import { blankLine, line, span } from '@/render/primitives';
-import { plain, truncateToWidth, widthOf } from '@/text';
+import { truncateToWidth, widthOf } from '@/text';
 import type { ToolHistoryEntry } from '@/types';
 import type { Block, RenderContext } from '@/render/types';
 import { asRecord, stringProp } from './shared';
@@ -101,7 +102,7 @@ function parseResult(entry: ToolHistoryEntry): CommandResult {
     const object = asRecord(parsed);
     if (object) {
       return {
-        output: typeof object.output === 'string' ? plain(object.output).trimEnd() : '',
+        output: typeof object.output === 'string' ? object.output.trimEnd() : '',
         ...(typeof object.exit_code === 'number' ? { exitCode: object.exit_code } : {}),
         ...(typeof object.session_id === 'number' ? { sessionId: object.session_id } : {}),
         ...(typeof object.wall_time_seconds === 'number'
@@ -112,7 +113,7 @@ function parseResult(entry: ToolHistoryEntry): CommandResult {
     }
   } catch {}
 
-  return { output: plain(raw).trimEnd() };
+  return { output: raw.trimEnd() };
 }
 
 function shellCommandLine(command: string, ctx: RenderContext, prefix: '$ ' | ''): Block {
@@ -132,7 +133,7 @@ function shellCommandLine(command: string, ctx: RenderContext, prefix: '$ ' | ''
 function statusLine(result: CommandResult, ctx: RenderContext) {
   const failed = Boolean(result.error) || (result.exitCode !== undefined && result.exitCode !== 0);
   const mark = failed ? '✗' : '✓';
-  const style = failed ? chalk.redBright.bold : chalk.greenBright.bold;
+  const style = failed ? chalk.red.bold : chalk.green.bold;
   const elapsed = result.wallTimeSeconds === undefined
     ? ''
     : ` • ${result.wallTimeSeconds < 1 ? `${Math.max(1, Math.round(result.wallTimeSeconds * 1_000))}ms` : `${result.wallTimeSeconds.toFixed(1)}s`}`;
@@ -171,10 +172,10 @@ function compactCommand(
   const commandPreview = truncateToWidth(visibleCommandLines[0] ?? command.trim(), available);
   const block: Block = [
     line(
-      span('• ', failed ? chalk.redBright : label === 'Ran' ? chalk.greenBright : ctx.theme.dimmed),
+      span('• ', failed ? chalk.red.bold : label === 'Ran' ? chalk.green.bold : ctx.theme.dimmed),
       span(label, chalk.bold),
       span(' '),
-      span(commandPreview, failed ? chalk.redBright : undefined),
+      span(commandPreview),
     ),
   ];
   visibleCommandLines.slice(1).forEach(commandLine => {
@@ -188,10 +189,10 @@ function compactCommand(
   const outputLines = commandOutputLines(output);
   let firstOutputLine = true;
   outputLines.forEach(text => {
-    const wrapped = wrapTextBlock(
+    const wrapped = wrapAnsiLine(
       text,
       Math.max(1, ctx.width - 4),
-      failed ? chalk.redBright.dim : ctx.theme.dimmed,
+      true,
     );
     for (const outputLine of wrapped) {
       block.push(
@@ -318,10 +319,9 @@ export function renderCommandActivity(
         block.push(
           ...command.result.output
             .split('\n')
-            .flatMap(text => wrapTextBlock(
+            .flatMap(text => wrapAnsiLine(
               text,
               outputWidth,
-              command.failed ? chalk.redBright : undefined,
             )),
         );
       }

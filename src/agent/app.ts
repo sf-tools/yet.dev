@@ -1033,7 +1033,6 @@ export class AgentApp {
   }
 
   handleFatalError(error: unknown, code = 1) {
-    this.playSound('error');
     this.clearTransientBlock();
     if (process.stdout.isTTY) process.stdout.write('\u001b[?25h');
     process.stderr.write(`${plain(error instanceof Error ? error.stack || error.message : String(error))}\n`);
@@ -2879,8 +2878,8 @@ export class AgentApp {
     this.persistEntry(EntryKind.Meta, text);
   }
 
-  private async compactConversation(options: { manual?: boolean; force?: boolean } = {}) {
-    const { manual = false, force = false } = options;
+  private async compactConversation(options: { manual?: boolean; force?: boolean; playErrorSound?: boolean } = {}) {
+    const { manual = false, force = false, playErrorSound = false } = options;
 
     if (this.state.compacting) return false;
     if (!manual && !this.shouldAutoCompact()) return false;
@@ -2922,6 +2921,7 @@ export class AgentApp {
       this.persistEntry(
         EntryKind.Error,
         `${manual ? 'compaction' : 'automatic compaction'} failed: ${plain(error instanceof Error ? error.message : String(error))}`,
+        { playErrorSound },
       );
       return false;
     } finally {
@@ -2930,8 +2930,8 @@ export class AgentApp {
     }
   }
 
-  private persistHistoryEntries(entries: HistoryEntry[]) {
-    if (entries.some(entry => entry.type === 'entry' && entry.kind === EntryKind.Error))
+  private persistHistoryEntries(entries: HistoryEntry[], options: { playErrorSound?: boolean } = {}) {
+    if (options.playErrorSound && entries.some(entry => entry.type === 'entry' && entry.kind === EntryKind.Error))
       this.playSound('error');
     for (const entry of entries) {
       this.store.pushHistoryEntry(entry);
@@ -2953,9 +2953,9 @@ export class AgentApp {
     this.render();
   }
 
-  private persistEntry(kind: EntryKind, text: string) {
+  private persistEntry(kind: EntryKind, text: string, options: { playErrorSound?: boolean } = {}) {
     if (!text.trim()) return;
-    this.persistHistoryEntries([{ type: 'entry', kind, text }]);
+    this.persistHistoryEntries([{ type: 'entry', kind, text }], options);
   }
 
   private persistPlain(text: string) {
@@ -3118,7 +3118,7 @@ export class AgentApp {
     return parts.length > 0 ? parts : expanded;
   }
 
-  private async runShellCommand(cmd: string) {
+  private async runShellCommand(cmd: string, playErrorSound = true) {
     const trimmedCommand = cmd.trim();
     this.store.setBusyStatusText(trimmedCommand);
     this.setBusy(true);
@@ -3144,13 +3144,13 @@ export class AgentApp {
         sandboxMode: profile.sandboxMode,
       });
       const trimmed = result.output.trimEnd();
-      if (result.exitCode !== 0) this.playSound('error');
+      if (playErrorSound && result.exitCode !== 0) this.playSound('error');
 
       this.persistEntry(EntryKind.Shell, `${trimmedCommand} exit ${result.exitCode}`);
       if (trimmed) this.persistAnsi(trimmed);
       else if (result.exitCode === 0) this.persistPlain('(no output)');
     } catch (error: unknown) {
-      this.persistEntry(EntryKind.Error, plain(error instanceof Error ? error.message : String(error)));
+      this.persistEntry(EntryKind.Error, plain(error instanceof Error ? error.message : String(error)), { playErrorSound });
     } finally {
       this.setBusy(false);
       this.render();
@@ -3308,7 +3308,7 @@ export class AgentApp {
     }
   }
 
-  private createSlashCommandContext(): SlashCommandContext {
+  private createSlashCommandContext(playErrorSound = true): SlashCommandContext {
     return {
       store: this.store,
       cleanup: code => this.cleanup(code),
@@ -3316,7 +3316,7 @@ export class AgentApp {
       deleteCurrentSession: () => this.deleteCurrentSession(),
       forkCurrentSession: name => this.forkCurrentSession(name),
       startSideConversation: question => this.startSideConversation(question),
-      compactConversation: options => this.compactConversation(options),
+      compactConversation: options => this.compactConversation({ ...options, playErrorSound }),
       setCurrentModel: model => this.setCurrentModel(model),
       setThinkingMode: thinkingMode => this.setThinkingMode(thinkingMode),
       setFastModeEnabled: enabled => this.setFastModeEnabled(enabled),
@@ -3380,7 +3380,7 @@ export class AgentApp {
       listBackgroundTerminals: () => this.backgroundTerminals.list(),
       stopBackgroundTerminals: () => this.backgroundTerminals.stopAll(),
       printEntries: entries => this.printEphemeralEntries(entries),
-      persistEntries: entries => this.persistHistoryEntries(entries),
+      persistEntries: entries => this.persistHistoryEntries(entries, { playErrorSound }),
       getGoal: () => this.state.goal,
       setGoal: goal => this.setThreadGoal(goal),
     };
@@ -3394,6 +3394,7 @@ export class AgentApp {
       this.persistEntry(
         EntryKind.Error,
         `/${command.invocation} is unavailable in side conversations. Press Ctrl+C to return to the main thread first.`,
+        { playErrorSound: true },
       );
       return true;
     }
@@ -3413,6 +3414,7 @@ export class AgentApp {
         this.persistEntry(
           EntryKind.Error,
           plain(error instanceof Error ? error.message : String(error)),
+          { playErrorSound: true },
         );
       }
     })();
@@ -3426,6 +3428,7 @@ export class AgentApp {
 
     if (!trimmed) return;
 
+    const playErrorSound = queuedSubmission.loopGeneration === undefined;
     const planningModeOverride = queuedSubmission.planningMode;
     const previousPlanningMode = planningModeOverride === undefined ? undefined : this.state.planningMode;
 
@@ -3437,12 +3440,12 @@ export class AgentApp {
     const slashCommand = this.slashCommands.parse(trimmed);
     if (slashCommand) {
       if (slashCommand.type === 'empty') {
-        this.persistEntry(EntryKind.Error, 'missing slash command');
+        this.persistEntry(EntryKind.Error, 'missing slash command', { playErrorSound });
         return;
       }
 
       if (slashCommand.type === 'unknown') {
-        this.persistEntry(EntryKind.Error, `unknown slash command: /${slashCommand.invocation}`);
+        this.persistEntry(EntryKind.Error, `unknown slash command: /${slashCommand.invocation}`, { playErrorSound });
         return;
       }
 
@@ -3453,6 +3456,7 @@ export class AgentApp {
         this.persistEntry(
           EntryKind.Error,
           `/${slashCommand.invocation} is unavailable in side conversations. Press Ctrl+C to return to the main thread first.`,
+          { playErrorSound },
         );
         return;
       }
@@ -3466,7 +3470,7 @@ export class AgentApp {
 
       try {
         await slashCommand.command.execute(
-          this.createSlashCommandContext(),
+          this.createSlashCommandContext(playErrorSound),
           {
             raw: trimmed,
             invocation: slashCommand.invocation,
@@ -3475,7 +3479,7 @@ export class AgentApp {
           },
         );
       } catch (error: unknown) {
-        this.persistEntry(EntryKind.Error, plain(error instanceof Error ? error.message : String(error)));
+        this.persistEntry(EntryKind.Error, plain(error instanceof Error ? error.message : String(error)), { playErrorSound });
       } finally {
         if (showBusyIndicator) this.setBusy(false);
 
@@ -3493,7 +3497,7 @@ export class AgentApp {
     }
 
     if (trimmed.startsWith('!') && !this.sideConversationActive) {
-      await this.runShellCommand(trimmed.slice(1));
+      await this.runShellCommand(trimmed.slice(1), playErrorSound);
       return;
     }
 
@@ -3645,6 +3649,11 @@ export class AgentApp {
               this.scheduleRender();
               break;
             case 'tool-call': {
+              // Finish the preceding message before tool history moves the live tail down.
+              reasoningStream?.flush();
+              assistantStream?.flush();
+              this.persistCurrentLiveOutcome();
+              syncLiveUsage();
               turnHadWorkActivity = true;
               const inputRecord = event.call.input &&
                 typeof event.call.input === 'object' &&
@@ -3677,13 +3686,6 @@ export class AgentApp {
               break;
             }
             case 'tool-result': {
-              if (event.call.name === 'exec_command' || event.call.name === 'write_stdin') {
-                try {
-                  const output = JSON.parse(event.result.output);
-                  if (output?.error || (typeof output?.exit_code === 'number' && output.exit_code !== 0))
-                    this.playSound('error');
-                } catch {}
-              }
               const part = {
                 toolCallId: event.call.id,
                 toolName: event.call.namespace
@@ -3710,7 +3712,6 @@ export class AgentApp {
               break;
             }
             case 'tool-error': {
-              this.playSound('error');
               const entry = createFailedToolEntry({
                 toolCallId: event.call.id,
                 toolName: event.call.namespace

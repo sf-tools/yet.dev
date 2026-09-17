@@ -39,7 +39,7 @@ export function createExecCommandTool(options: ToolFactoryOptions) {
   return {
     name: 'exec_command',
     description:
-      'Runs a command in a PTY, returning output or a session ID for ongoing interaction.',
+      'Runs a command, returning output or a session ID for ongoing interaction.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -48,6 +48,10 @@ export function createExecCommandTool(options: ToolFactoryOptions) {
         workdir: {
           type: 'string',
           description: 'Working directory for the command. Defaults to the turn cwd.',
+        },
+        tty: {
+          type: 'boolean',
+          description: 'True allocates a PTY for the command; false or omitted uses plain pipes.',
         },
         yield_time_ms: {
           type: 'integer',
@@ -78,6 +82,7 @@ export function createExecCommandTool(options: ToolFactoryOptions) {
       assertOnlyArguments(object, [
         'cmd',
         'workdir',
+        'tty',
         'yield_time_ms',
         'max_output_tokens',
         'permissions',
@@ -91,6 +96,8 @@ export function createExecCommandTool(options: ToolFactoryOptions) {
         throw new Error('justification must be a string');
       if (object.workdir !== undefined && typeof object.workdir !== 'string')
         throw new Error('workdir must be a string');
+      if (object.tty !== undefined && typeof object.tty !== 'boolean')
+        throw new Error('tty must be a boolean');
       const yieldTimeMs = optionalInteger(object, 'yield_time_ms', 250, 30_000);
       const maxOutputTokens = optionalInteger(object, 'max_output_tokens', 250, 50_000);
       if (requested === 'elevated' && !justification)
@@ -128,6 +135,7 @@ export function createExecCommandTool(options: ToolFactoryOptions) {
           sandboxMode,
           yieldTimeMs,
           maxOutputTokens,
+          tty: object.tty,
         });
         return { output: encodeResult(result) };
       } catch (error) {

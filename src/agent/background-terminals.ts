@@ -1,5 +1,7 @@
 import { spawn as spawnPty } from '@lydell/node-pty';
+import { spawn } from 'node:child_process';
 import { realpath } from 'node:fs/promises';
+import { constants } from 'node:os';
 import { resolve } from 'node:path';
 
 import { USER_SHELL } from '@/config';
@@ -22,6 +24,7 @@ export type BackgroundTerminalExecOptions = {
   writableRoots?: string[];
   yieldTimeMs?: number;
   maxOutputTokens?: number;
+  tty?: boolean;
 };
 
 export type BackgroundTerminalResult = {
@@ -45,7 +48,7 @@ type TerminalEntry = {
   output: string;
   readOffset: number;
   exitCode?: number;
-  process: ReturnType<typeof spawnPty>;
+  process: { write(data: string): void; kill(): void };
   waiters: Set<() => void>;
 };
 
@@ -153,24 +156,28 @@ export class BackgroundTerminalManager {
       writableRoots,
     });
     const sessionId = this.nextSessionId++;
-    const proc = spawnPty(prepared.executable, prepared.args, {
-      name: 'xterm-256color',
+    const env = {
+      ...prepared.env,
+      NO_COLOR: '1',
+      TERM: 'dumb',
+      LANG: 'C.UTF-8',
+      LC_CTYPE: 'C.UTF-8',
+      LC_ALL: 'C.UTF-8',
+      COLORTERM: '',
+      PAGER: 'cat',
+      GIT_PAGER: 'cat',
+      GH_PAGER: 'cat',
+      CODEX_CI: '1',
+    };
+    const terminal = options.tty ? spawnPty(prepared.executable, prepared.args, {
+      name: env.TERM,
       cols: Math.max(20, Math.floor((process.stdout.columns || 120) / 1.5)),
       rows: Math.max(10, Math.floor((process.stdout.rows || 30) / 1.5)),
       cwd,
-      env: {
-        ...prepared.env,
-        TERM: 'xterm-256color',
-        COLORTERM: process.env.COLORTERM || 'truecolor',
-        FORCE_COLOR: process.env.FORCE_COLOR || '1',
-        CLICOLOR: process.env.CLICOLOR || '1',
-        CLICOLOR_FORCE: process.env.CLICOLOR_FORCE || '1',
-        PAGER: 'cat',
-        GIT_PAGER: 'cat',
-        GH_PAGER: 'cat',
-        SYSTEMD_PAGER: 'cat',
-        MANPAGER: 'cat',
-      },
+      env,
+    }) : null;
+    const child = terminal ? null : spawn(prepared.executable, prepared.args, {
+      cwd, env, stdio: ['ignore', 'pipe', 'pipe'], detached: process.platform !== 'win32',
     });
     const entry: TerminalEntry = {
       sessionId,
@@ -178,29 +185,59 @@ export class BackgroundTerminalManager {
       startedAt: Date.now(),
       output: '',
       readOffset: 0,
-      process: proc,
+      process: terminal ?? {
+        write() {
+          throw new Error('stdin is closed for this session; rerun exec_command with tty=true to keep stdin open');
+        },
+        kill() {
+          try {
+            if (process.platform !== 'win32' && child!.pid) process.kill(-child!.pid, 'SIGKILL');
+            else child!.kill('SIGKILL');
+          } catch (error) {
+            if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error;
+          }
+        },
+      },
       waiters: new Set(),
     };
     this.processes.set(sessionId, entry);
     this.onChange();
 
-    const dataDisposable = proc.onData(data => {
+    const onData = (data: string) => {
       entry.output += data;
       if (entry.output.length > MAX_CAPTURE_CHARS) {
         const removed = entry.output.length - MAX_CAPTURE_CHARS;
         entry.output = entry.output.slice(removed);
         entry.readOffset = Math.max(0, entry.readOffset - removed);
       }
-    });
-    const exitDisposable = proc.onExit(({ exitCode, signal }) => {
+    };
+    const onExit = (exitCode: number, signal?: number) => {
       entry.exitCode = signal !== undefined && signal !== 0 ? 128 + signal : exitCode;
       if (signal !== undefined && signal !== 0)
         entry.output += `\nprocess exited with signal ${signal}`;
-      dataDisposable.dispose();
-      exitDisposable.dispose();
       this.notifyWaiters(entry);
       this.onChange();
-    });
+    };
+    if (terminal) {
+      const dataDisposable = terminal.onData(onData);
+      const exitDisposable = terminal.onExit(({ exitCode, signal }) => {
+        dataDisposable.dispose();
+        exitDisposable.dispose();
+        onExit(exitCode, signal);
+      });
+    } else if (child) {
+      // Like Codex, read both pipes and display their chunks in arrival order.
+      child.stdout.setEncoding('utf8').on('data', onData);
+      child.stderr.setEncoding('utf8').on('data', onData);
+      child.once('error', error => {
+        onData(error.message);
+        onExit(1);
+      });
+      // close follows pipe EOF, so the final result includes trailing output.
+      child.once('close', (code, signal) => {
+        if (entry.exitCode === undefined) onExit(code ?? 1, signal ? constants.signals[signal] : undefined);
+      });
+    }
 
     const yieldTimeMs = clamp(
       options.yieldTimeMs,

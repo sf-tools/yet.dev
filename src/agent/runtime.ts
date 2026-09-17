@@ -226,6 +226,23 @@ export class AgentRuntime implements AgentRuntimeHandle {
               this.store.appendLiveReasoningText(event.text);
               break;
             case 'tool-call': {
+              const liveEntries = [
+                ...(state.liveReasoningText.trim()
+                  ? [{ type: 'entry' as const, kind: EntryKind.Reasoning, text: state.liveReasoningText }]
+                  : []),
+                ...(state.liveAssistantText.trim()
+                  ? [{ type: 'entry' as const, kind: EntryKind.Assistant, text: state.liveAssistantText }]
+                  : []),
+              ];
+              state.liveReasoningText = '';
+              state.liveAssistantText = '';
+              for (const liveEntry of liveEntries) {
+                this.store.pushHistoryEntry(liveEntry);
+                this.record({
+                  type: liveEntry.kind === EntryKind.Reasoning ? 'reasoning' : 'assistant_message',
+                  payload: { entries: [liveEntry] },
+                });
+              }
               const entry = createPendingToolEntry({
                 toolCallId: event.call.id,
                 toolName: event.call.namespace
@@ -277,7 +294,7 @@ export class AgentRuntime implements AgentRuntimeHandle {
       abortController.signal.throwIfAborted();
       this.store.pushMessages(result.messages);
       const reasoning = state.liveReasoningText.trim();
-      const assistant = state.liveAssistantText.trim() || result.text.trim();
+      const assistant = state.liveAssistantText.trim();
       const entries: HistoryEntry[] = [
         ...(reasoning ? [{ type: 'entry' as const, kind: EntryKind.Reasoning, text: reasoning }] : []),
         ...(assistant ? [{ type: 'entry' as const, kind: EntryKind.Assistant, text: assistant }] : []),

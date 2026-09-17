@@ -12,6 +12,7 @@ import { renderHistoryEntry } from '@/render/components/entry';
 import { renderComposer } from '@/render/components/composer';
 import { renderStatusIndicator } from '@/render/components/status-indicator';
 import { renderCommandActivity } from '@/render/components/tools/command-activity';
+import { wrapAnsiLine } from '@/render/ansi';
 import { renderTranscriptOverlay } from '@/render/components/transcript-overlay';
 import {
   codeLanguageForPath,
@@ -233,6 +234,47 @@ const commandHistory: ToolHistoryEntry[] = [
     status: 'completed',
   },
 ];
+const previousColorLevel = chalk.level;
+chalk.level = 3;
+try {
+  const failedCommand: ToolHistoryEntry = {
+    type: 'tool', toolCallId: 'mixed-output', toolName: 'exec_command',
+    input: { cmd: 'cat present.ts; cat missing.ts' },
+    output: JSON.stringify({ output: 'source code\ncat: missing.ts: No such file', exit_code: 1 }),
+    status: 'completed',
+  };
+  for (const transcript of [true, false]) {
+    const rendered = serializeBlock(renderCommandActivity([failedCommand], renderContext, { transcript }));
+    const sourceLine = rendered.find(value => value.includes('source code'))!;
+    const errorLine = rendered.find(value => value.includes('No such file'))!;
+    check(!/\x1b\[(?:31|91)m/.test(sourceLine + errorLine),
+      `${transcript ? 'transcript' : 'preview'} keeps failed command output in its normal color`);
+    check(rendered.some(value => /\x1b\[(?:31|91)m/.test(value) && value.includes(transcript ? '✗' : '•')),
+      'failed commands retain a red status marker');
+    if (transcript) check(rendered.some(value => value.includes('(1)')), 'transcript retains the failed exit code');
+
+    const colored = { ...failedCommand, output: JSON.stringify({
+      output: '\x1b[32mgreen output\x1b[0m\n\x1b[31mred diagnostic\x1b[0m\nplain output', exit_code: 1,
+    }) };
+    const coloredLines = serializeBlock(renderCommandActivity([colored], renderContext, { transcript }));
+    check(coloredLines.some(value => value.includes('\x1b[32m') && value.includes('green output')),
+      'commands retain their own stdout colors');
+    check(coloredLines.some(value => value.includes('\x1b[31m') && value.includes('red diagnostic')),
+      'commands retain their own diagnostic colors');
+    check(!/\x1b\[(?:31|32|91)m/.test(coloredLines.find(value => value.includes('plain output'))!),
+      'command colors do not leak to subsequent lines');
+  }
+  const wrappedColor = serializeBlock(wrapAnsiLine('\x1b[32mabcdef\x1b[0m\tplain\x1b[2J', 4));
+  deepEqual(wrappedColor.map(stripAnsi), ['abcd', 'ef  ', '  pl', 'ain'],
+    'ANSI output wraps by visible width, expands tabs, and ignores screen controls');
+  check(wrappedColor[0].includes('\x1b[32m') && wrappedColor[1].includes('\x1b[32m') && !wrappedColor[2].includes('\x1b[32m'),
+    'ANSI colors survive wrapping and reset before subsequent text');
+  const trueColor = serializeBlock(wrapAnsiLine('\x1b[38;2;12;34;56mtruecolor\x1b[39m plain', 100))[0];
+  check(trueColor.includes('\x1b[38;2;12;34;56m') && stripAnsi(trueColor) === 'truecolor plain',
+    'command output retains explicit RGB colors');
+} finally {
+  chalk.level = previousColorLevel;
+}
 equal(
   serializeBlock(renderCommandActivity(commandHistory, renderContext)).join('\n'),
   ' • Ran 2 commands · ctrl + t to view transcript',

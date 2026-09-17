@@ -33,7 +33,7 @@
     "build": "ant gen:version && ant scripts/build.mjs",
     "compile": "ant build && ant compile dist/yet.js -o .yet-build/yet",
     "start": "ant build && ant dist/yet.js",
-    "test": "ant scripts/build-tests.mjs && ant .yet-build/tests.js"
+    "test": "ant scripts/build-tests.mjs && ant .yet-build/tests.js && ant .yet-build/streaming-tests.js"
   },
   "dependencies": {
     "@lydell/node-pty": "^1.2.0-beta.15",

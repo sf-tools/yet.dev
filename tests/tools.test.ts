@@ -180,6 +180,25 @@ try {
   check(!listed.output.includes('Operation not permitted'), 'sandboxed ls has no startup noise');
   check(!listed.output.includes('process exited with signal 0'), 'sandboxed ls has a clean exit');
 
+  const piped = JSON.parse((await registry.execute('exec_command', {
+    cmd: 'if [ -t 1 ]; then printf tty; else printf pipe; fi; printf "\\nout\\n"; printf "err\\n" >&2; exit 7',
+  })).output);
+  check(piped.output.includes('pipe\n'), 'exec_command defaults to pipes like Codex');
+  check(piped.output.includes('out\n') && piped.output.includes('err\n'), 'pipe capture retains stdout and stderr');
+  equal(piped.exit_code, 7, 'mixed output retains the process exit code');
+  const noInput = JSON.parse((await registry.execute('exec_command', { cmd: 'cat; printf eof' })).output);
+  equal(noInput.output, 'eof', 'non-interactive stdin is closed instead of waiting indefinitely');
+  const terminal = JSON.parse((await registry.execute('exec_command', {
+    cmd: 'if [ -t 1 ]; then printf tty; fi; read yet_reply; printf "received:%s" "$yet_reply"',
+    tty: true, yield_time_ms: 250,
+  })).output);
+  check(terminal.output.includes('tty') && typeof terminal.session_id === 'number', 'tty=true keeps an interactive terminal open');
+  const replied = JSON.parse((await registry.execute('write_stdin', {
+    session_id: terminal.session_id, chars: 'hello\n', yield_time_ms: 1_000,
+  })).output);
+  check(replied.output.includes('received:hello') && replied.exit_code === 0, 'interactive terminals accept stdin');
+  await rejects(registry.execute('exec_command', { cmd: 'true', tty: 'yes' }), /tty must be a boolean/, 'tty is validated');
+
   const yielded = await registry.execute('exec_command', {
     cmd: 'printf ready; sleep 0.5; printf done',
     yield_time_ms: 250,
@@ -188,9 +207,12 @@ try {
     output: string;
     session_id?: number;
   };
-  check(yieldedResult.output.includes('ready'), 'long commands yield their initial PTY output');
+  check(yieldedResult.output.includes('ready'), 'long commands yield their initial output');
   check(typeof yieldedResult.session_id === 'number', 'long commands yield a background session ID');
   equal(terminalManager.list().length, 1, 'yielded commands appear in /ps state');
+  await rejects(registry.execute('write_stdin', {
+    session_id: yieldedResult.session_id, chars: 'input',
+  }), /stdin is closed.*tty=true/, 'piped sessions reject writes with the Codex tty hint');
   const completed = await registry.execute('write_stdin', {
     session_id: yieldedResult.session_id,
     yield_time_ms: 3_000,
@@ -202,6 +224,17 @@ try {
   check(completedResult.output.includes('done'), 'write_stdin returns unread background output');
   equal(completedResult.exit_code, 0, 'write_stdin reports the background command exit code');
   equal(terminalManager.list().length, 0, 'completed commands leave /ps state');
+
+  const stopped = JSON.parse((await registry.execute('exec_command', {
+    cmd: 'printf started; sleep 30', yield_time_ms: 250,
+  })).output);
+  equal(terminalManager.stopAll(), 1, 'stop terminates a running piped command');
+  const stoppedResult = JSON.parse((await registry.execute('write_stdin', {
+    session_id: stopped.session_id, yield_time_ms: 1_000,
+  })).output);
+  check(stoppedResult.exit_code !== undefined && stoppedResult.exit_code !== 0,
+    'stopped piped commands close their streams and report termination');
+  equal(terminalManager.list().length, 0, 'stopped piped commands leave no background sessions');
 
   if (process.platform === 'darwin' && existsSync('/usr/bin/nc')) {
     const server = createServer(socket => socket.end());
