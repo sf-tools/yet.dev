@@ -3384,10 +3384,11 @@ export class AgentApp {
     };
   }
 
-  private async runImmediateBackgroundCommand(command: ResolvedSlashCommand) {
-    if (!['ps', 'stop'].includes(command.command.name)) return false;
+  private runImmediateBackgroundCommand(command: ResolvedSlashCommand) {
+    if (!['ps', 'stop', 'config', 'permissions', 'model', 'effort', 'fast', 'status', 'usage', 'copy'].includes(command.command.name))
+      return false;
 
-    if (this.sideConversationActive) {
+    if (this.sideConversationActive && !['copy', 'status'].includes(command.command.name)) {
       this.persistEntry(
         EntryKind.Error,
         `/${command.invocation} is unavailable in side conversations. Press Ctrl+C to return to the main thread first.`,
@@ -3395,21 +3396,24 @@ export class AgentApp {
       return true;
     }
 
-    try {
-      await command.command.execute(this.createSlashCommandContext(), {
-        raw: command.argsText
-          ? `/${command.invocation} ${command.argsText}`
-          : `/${command.invocation}`,
-        invocation: command.invocation,
-        argsText: command.argsText,
-        argv: command.argv,
-      });
-    } catch (error: unknown) {
-      this.persistEntry(
-        EntryKind.Error,
-        plain(error instanceof Error ? error.message : String(error)),
-      );
-    }
+    // Menu commands wait for keyboard input, so they must not hold the stdin task.
+    void (async () => {
+      try {
+        await command.command.execute(this.createSlashCommandContext(), {
+          raw: command.argsText
+            ? `/${command.invocation} ${command.argsText}`
+            : `/${command.invocation}`,
+          invocation: command.invocation,
+          argsText: command.argsText,
+          argv: command.argv,
+        });
+      } catch (error: unknown) {
+        this.persistEntry(
+          EntryKind.Error,
+          plain(error instanceof Error ? error.message : String(error)),
+        );
+      }
+    })();
     return true;
   }
 
@@ -3977,7 +3981,7 @@ export class AgentApp {
     if (
       this.state.busy &&
       slashCommand?.type === 'resolved' &&
-      (await this.runImmediateBackgroundCommand(slashCommand))
+      this.runImmediateBackgroundCommand(slashCommand)
     ) {
       return;
     }
@@ -4183,28 +4187,7 @@ export class AgentApp {
     const accepted = acceptComposerSuggestion(this.store, suggestions);
     if (!accepted) return false;
 
-    const raw = this.state.inputChars.join('');
-    this.clearHistoryNavigation();
-    this.resetPreferredComposerColumn();
-    this.store.resetComposer();
-    this.store.resetSelectedSuggestion();
-    this.render();
-
-    if (!raw.trim()) return true;
-
-    if (
-      this.activeSubmissionTask ||
-      this.state.busy ||
-      this.state.queuedSubmissions.length > 0 ||
-      this.drainingQueuedSubmissions
-    ) {
-      this.store.enqueueSubmission({ text: raw });
-      this.render();
-      void this.drainQueuedSubmissions();
-      return true;
-    }
-
-    this.startSubmissionTask(raw);
+    await this.submit();
     return true;
   }
 

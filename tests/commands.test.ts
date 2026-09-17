@@ -360,6 +360,74 @@ await configAppInternals.handleInputBinding({ type: 'escape' });
 equal(configAppInternals.store.getState().configPicker, null, 'escape closes the configuration picker');
 await configAppInternals.activeSubmissionTask;
 
+const streamingSettingsApp = new AgentApp();
+const streamingSettings = streamingSettingsApp as unknown as {
+  store: ReturnType<typeof createAgentStore>;
+  render(): void;
+  persistPreferences(): Promise<void>;
+  submit(): Promise<void>;
+  onStdinData(chunk: string): void;
+  stdinTask: Promise<void>;
+  activeSubmissionTask: Promise<void> | null;
+};
+streamingSettings.render = () => {};
+streamingSettings.persistPreferences = async () => {};
+const activeTurn = new Promise<void>(() => {});
+const activeAbort = new AbortController();
+streamingSettings.activeSubmissionTask = activeTurn;
+streamingSettings.store.update(state => {
+  state.busy = true;
+  state.abortController = activeAbort;
+  state.showThinking = true;
+  state.permissionMode = 'ask';
+  state.fastModeEnabled = false;
+});
+const sendStreamingInput = async (text: string) => {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  streamingSettings.onStdinData(text);
+  try {
+    await Promise.race([
+      streamingSettings.stdinTask,
+      new Promise<never>((_, reject) => {
+        timeout = setTimeout(() => reject(new Error('settings command blocked keyboard input')), 1_000);
+      }),
+    ]);
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
+};
+await sendStreamingInput('/conf\r');
+check(streamingSettings.store.getState().configPicker !== null, '/config suggestions open immediately during streaming');
+equal(streamingSettings.store.getState().queuedSubmissions.length, 0, '/config is not queued behind the active turn');
+streamingSettings.store.appendLiveAssistantText('The response keeps streaming.');
+await sendStreamingInput(' ');
+await sendStreamingInput('\u001b');
+equal(streamingSettings.store.getState().configPicker, null, 'the streaming configuration picker accepts keyboard input and closes');
+equal(streamingSettings.store.getState().showThinking, false, 'configuration changes apply while the turn remains active');
+equal(streamingSettings.store.getState().liveAssistantText, 'The response keeps streaming.', 'opening settings preserves streamed output');
+equal(streamingSettings.activeSubmissionTask, activeTurn, 'settings do not replace the active response task');
+check(streamingSettings.store.getState().busy && !activeAbort.signal.aborted, 'closing settings leaves the response running');
+
+streamingSettings.store.replaceInput('/permissions');
+await streamingSettings.submit();
+check(streamingSettings.store.getState().pendingChoice !== null, 'direct /permissions submission opens immediately during streaming');
+await sendStreamingInput('3');
+equal(streamingSettings.store.getState().pendingChoice?.title, 'Enable full access?', 'streaming permission changes retain full-access confirmation');
+check(streamingSettings.store.getState().permissionMode !== 'full', 'opening confirmation does not grant full access');
+await sendStreamingInput('\u001b');
+equal(streamingSettings.store.getState().pendingChoice, null, 'permission confirmation can be cancelled without blocking stdin');
+check(!activeAbort.signal.aborted, 'cancelling a permissions menu does not interrupt the response');
+await sendStreamingInput('/permissions auto\r');
+equal(streamingSettings.store.getState().permissionMode, 'auto', 'permission arguments apply immediately during streaming');
+await sendStreamingInput('/fast\r');
+check(streamingSettings.store.getState().fastModeEnabled, 'other runtime settings can change during streaming');
+await sendStreamingInput('/permissions invalid\r');
+check(streamingSettings.store.getState().historyEntries.some(entry => entry.type === 'entry' && entry.kind === EntryKind.Error && entry.text.includes('invalid permission mode')), 'immediate command failures are reported');
+await sendStreamingInput('/compact\r');
+equal(streamingSettings.store.getState().queuedSubmissions.at(-1)?.text, '/compact', 'commands that alter conversation history still wait for the turn');
+streamingSettings.activeSubmissionTask = null;
+streamingSettings.store.update(state => { state.busy = false; state.queuedSubmissions = []; });
+
 const statusApp = new AgentApp();
 const statusAppInternals = statusApp as unknown as {
   store: ReturnType<typeof createAgentStore>;
