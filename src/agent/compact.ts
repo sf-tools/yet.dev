@@ -8,6 +8,7 @@ import {
 } from '@/config';
 import { generateOpenAIText } from '@/providers/openai';
 import { plain } from '@/text';
+import { prepareAgentMessages } from './instructions';
 
 export type CompactMessagesOptions = {
   recentMessageCount?: number;
@@ -90,18 +91,20 @@ export async function compactMessages(
     thinkingMode = 'auto',
     fastModeEnabled = false,
   } = options;
-  const systemMessages = getSystemMessages(messages);
   const conversationMessages = getConversationMessages(messages);
   const tailCount = resolveTailCount(conversationMessages, recentMessageCount, force);
   if (conversationMessages.length <= tailCount)
     throw new Error('not enough conversation history to compact');
+
+  const prepared = await prepareAgentMessages(messages, { model });
+  const systemMessages = getSystemMessages(prepared);
 
   const result = await generateOpenAIText({
     model,
     thinkingMode,
     fastModeEnabled,
     messages: [
-      ...messages,
+      ...prepared,
       { role: 'user', content: COMPACTION_PROMPT },
     ],
   });

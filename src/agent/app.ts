@@ -140,6 +140,7 @@ import { AgentControl, type CollaborationActivity } from './collaboration/contro
 import { AgentRuntime } from './runtime';
 import { AgentGraphStore } from './collaboration/graph-store';
 import { ROOT_AGENT_INSTRUCTIONS } from './collaboration/role-instructions';
+import { prepareAgentMessages } from './instructions';
 import { AgentDaemonClient, listSharedAgents, sendSharedAgentCommand } from './daemon/client';
 import type { AgentDaemonCommand, SharedRootSnapshot } from './daemon/protocol';
 import {
@@ -2091,7 +2092,8 @@ export class AgentApp {
     return [...groups.values()].sort((a, b) => a.names[0].localeCompare(b.names[0]));
   }
 
-  private getRuntimeMessages(messages: AgentMessage[] = this.state.messages, planningMode = this.state.planningMode): AgentMessage[] {
+  private async getRuntimeMessages(messages: AgentMessage[] = this.state.messages, planningMode = this.state.planningMode): Promise<AgentMessage[]> {
+    messages = await prepareAgentMessages(messages, { model: this.state.currentModel });
     const permissionProfile = resolvePermissionProfile(this.state.permissionMode, {
       readOnly: planningMode,
     });
@@ -3555,7 +3557,7 @@ export class AgentApp {
         this.recordSessionEvent({ type: 'user_message', payload: { messages: mailboxMessages } });
       }
 
-      const runtimeMessages = this.getRuntimeMessages();
+      const runtimeMessages = await this.getRuntimeMessages();
       const estimatedPromptTokens = estimateMessageTokens(runtimeMessages);
       const sessionUsageAtTurnStart: AgentUsage = { ...this.state.sessionUsage };
       let completedPromptTokens = 0;

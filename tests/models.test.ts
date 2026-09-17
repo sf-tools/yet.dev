@@ -5,6 +5,7 @@ import { getAvailableOpenAIModels, loadOpenAIModelCache, refreshOpenAIModelAcces
 import { saveStoredOpenAIAuth } from '@/auth/storage';
 import { getOpenAIContextWindow, getOpenAIProviderModelId, getSupportedThinkingModes, normalizeYetPreferences } from '@/config';
 import { handleCliArgs } from '@/cli';
+import { createSystemPrompt } from '@/config/prompt';
 import { builtinSlashCommands, createSlashCommandRegistry, type SlashCommandContext } from '@/agent/slash-commands';
 import { check, deepEqual, equal, rejects } from './harness';
 
@@ -28,8 +29,8 @@ const catalogFetch = (async (url, init) => {
   check(String(url).endsWith('/codex/models?client_version=0.153.0'), 'ChatGPT discovery sends the Astra-compatible catalog version');
   equal((init?.headers as Record<string, string>)['ChatGPT-Account-ID'], 'model-account', 'catalog is scoped to the selected account');
   return Response.json({ models: [
-    { slug: astra, display_name: 'GPT-6-Astra', context_window: 272_000, visibility: 'list', supported_reasoning_levels: [{ effort: 'low' }, { effort: 'ultra' }], base_instructions: 'large prompt must not be cached' },
-    { slug: newModel, display_name: 'Catalog model', description: 'From the account', context_window: 512_000, visibility: 'list', supported_reasoning_levels: [{ effort: 'medium' }, { effort: 'high' }] },
+    { slug: astra, display_name: 'GPT-6-Astra', context_window: 272_000, visibility: 'list', supported_reasoning_levels: [{ effort: 'low' }, { effort: 'ultra' }], base_instructions: 'superseded legacy prompt', model_messages: { instructions_template: 'You are Codex.\n\n{{ personality }}\n\nUse the account-specific Astra instructions.\n- Batch reads in functions.exec.', instructions_variables: { personality_default: 'Be precise.' } } },
+    { slug: newModel, display_name: 'Catalog model', description: 'From the account', context_window: 512_000, visibility: 'list', supported_reasoning_levels: [{ effort: 'medium' }, { effort: 'high' }], base_instructions: 'You are Codex.\n\nUse the new catalog model instructions.' },
     { slug: daybreak, visibility: 'hide' },
   ] });
 }) as typeof fetch;
@@ -58,17 +59,22 @@ try {
   deepEqual(getSupportedThinkingModes(newModel), ['auto', 'medium', 'high'], 'new model reasoning levels come from the catalog');
   equal(getOpenAIProviderModelId(newModel), newModel, 'new catalog models can be sent to the provider');
   equal(normalizeYetPreferences({ model: newModel }).model, newModel, 'preferences retain catalog models');
+  const astraPrompt = createSystemPrompt(astra);
+  check(astraPrompt.includes('account-specific Astra instructions') && astraPrompt.includes('Be precise.'), 'model-specific templates render their default personality');
+  check(!astraPrompt.includes('superseded legacy prompt') && !astraPrompt.includes('functions.exec'), 'catalog templates take precedence and omit unsupported orchestration');
+  check(createSystemPrompt(newModel).includes('new catalog model instructions'), 'new model IDs use their supplied base instructions');
   const cli = handleCliArgs(['--model', newModel, '--effort', 'high']);
   check(cli.kind === 'start' && cli.model === newModel, 'CLI accepts discovered model IDs');
 
   const files = await readdir(cacheDirectory);
   equal(files.length, 1, 'catalog is persisted in one account cache');
   const cachedText = await readFile(join(cacheDirectory, files[0]), 'utf8');
-  check(!cachedText.includes('large prompt') && !cachedText.includes(oauth.accessToken), 'cache omits system prompts and credentials');
+  check(cachedText.includes('account-specific Astra instructions') && !cachedText.includes(oauth.accessToken), 'cache retains model instructions without credentials');
   resetOpenAIModelAccess();
   await loadOpenAIModelCache(options);
   deepEqual(ids(), [astra, newModel], 'a new process can restore the full model list from disk');
   equal(fetches, 1, 'restoring cached metadata needs no HTTP request');
+  equal(createSystemPrompt(astra), astraPrompt, 'offline startup restores the same model-specific instructions');
   await refreshOpenAIModelAccess(options);
   equal(fetches, 1, 'fresh catalogs skip network refresh');
   await saveStoredOpenAIAuth({ ...oauth, accessToken: 'rotated-token' }, authPath);
@@ -102,6 +108,7 @@ try {
   await saveStoredOpenAIAuth({ ...oauth, accountId: 'different-account' }, authPath);
   await loadOpenAIModelCache(options);
   check(!ids().includes(astra) && !ids().includes(newModel), 'another account never inherits a previous catalog');
+  check(!createSystemPrompt(astra).includes('account-specific Astra instructions'), 'account switches discard the previous account’s prompts');
   await saveStoredOpenAIAuth({ version: 1, provider: 'openai', method: 'api-key', apiKey: 'sk-model-test', updatedAt: new Date().toISOString() }, authPath);
   await loadOpenAIModelCache({ authPath });
   await refreshOpenAIModelAccess({ authPath, fetch: (async (url, init) => {

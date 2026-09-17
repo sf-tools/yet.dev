@@ -11,6 +11,7 @@ export type OpenAIModelOption = {
   efforts: ThinkingMode[];
   requiresAccountSupport?: boolean;
   showInPicker?: boolean;
+  instructions?: string;
 };
 
 const STANDARD_EFFORTS: ThinkingMode[] = ['auto', 'none', 'low', 'medium', 'high', 'xhigh'];

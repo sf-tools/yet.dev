@@ -6,7 +6,7 @@ await build({
   platform: 'node',
   format: 'esm',
   packages: 'external',
-  loader: { '.wav': 'base64' },
+  loader: { '.wav': 'base64', '.md': 'text' },
   outdir: '.yet-build',
   tsconfig: 'tsconfig.json',
   logLevel: 'info',

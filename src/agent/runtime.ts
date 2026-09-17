@@ -10,6 +10,7 @@ import {
 } from './session-storage';
 import { createCompletedToolEntry, createFailedToolEntry, createPendingToolEntry } from './tool-history';
 import { subagentInstructions } from './collaboration/role-instructions';
+import { prepareAgentMessages } from './instructions';
 import type { AgentControl } from './collaboration/control';
 import type { RegisteredAgent, AgentRuntimeHandle } from './collaboration/registry';
 import { createAgentStore, createInitialState, type AgentState, type AgentStore } from '@/store';
@@ -212,7 +213,7 @@ export class AgentRuntime implements AgentRuntimeHandle {
         model: state.currentModel,
         thinkingMode: state.thinkingMode,
         fastModeEnabled: state.fastModeEnabled,
-        messages: [...state.messages],
+        messages: await prepareAgentMessages(state.messages, { model: state.currentModel, cwd: this.agent.config.cwd }),
         tools: this.tools,
         signal: abortController.signal,
         takeSteers: () => Promise.resolve(this.control.mailboxMessages(this.agent.id)),

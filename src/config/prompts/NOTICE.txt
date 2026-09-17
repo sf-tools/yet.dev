@@ -1,0 +1,5 @@
+OpenAI Codex
+Copyright 2025 OpenAI
+
+Instruction templates derived from openai/codex, revision d3e5464ecf0e14e10610afdf6b067a955b7cb4bc.
+Modified for Yet's identity, available tools, and skill handling.

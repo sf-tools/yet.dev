@@ -7,6 +7,7 @@ await import('./collaboration.test');
 await import('./auth.test');
 await import('./diagnostics.test');
 await import('./models.test');
+await import('./instructions.test');
 await import('./commands.test');
 await import('./rendering.test');
 await import('./cli.test');

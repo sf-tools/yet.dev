@@ -1,4 +1,4 @@
-const SHARED = `Note that collaboration tools cannot be called from inside \`functions.exec\`. Call \`spawn_agent\`, \`send_message\`, \`followup_task\`, \`wait_agent\`, \`interrupt_agent\`, and \`list_agents\` only as direct tool calls using the recipient shown in their tool definitions, such as \`to=functions.collaboration.spawn_agent\`, since they are intentionally absent from \`functions.exec\` \`tools.*\` namespace. Available tools in \`functions.exec\` are explicitly described with a \`tools\` namespace in the developer message.
+const SHARED = `Call collaboration tools directly using their declared namespace and JSON argument schemas: \`collaboration.spawn_agent\`, \`collaboration.send_message\`, \`collaboration.followup_task\`, \`collaboration.wait_agent\`, \`collaboration.interrupt_agent\`, and \`collaboration.list_agents\`.
 
 All agents share the same directory. In detail:
 - All agents have access to the same container and filesystem as you.

@@ -11,6 +11,7 @@ import {
 import { resolveOpenAIConnection } from './openai';
 import { loadStoredOpenAIAuth, YET_AUTH_PATH } from './storage';
 import type { StoredOpenAIAuth } from './types';
+import { readCodexInstructions } from '@/config/model-instructions';
 
 export { getAvailableOpenAIModels } from '@/config/models';
 
@@ -73,6 +74,7 @@ function parseCatalog(models: unknown, codex: boolean): OpenAIModelOption[] | nu
         ? model.context_window : known?.contextWindow ?? null,
       efforts,
       showInPicker: !codex || model.visibility === 'list',
+      ...(codex ? { instructions: readCodexInstructions(model) } : {}),
     });
   }
   return result;
@@ -145,7 +147,7 @@ export async function refreshOpenAIModelAccess(options: CatalogOptions = {}) {
     const entry: CacheEntry = {
       version: 1, clientVersion: CODEX_MODELS_CLIENT_VERSION, accountKey: key,
       fetchedAt: Date.now(), codex,
-      // Keep startup reads small: omit the catalog's large system prompts.
+      // Persist the resolved instructions so offline startup keeps the model's prompt.
       models: catalog.map(model => ({
         ...(codex ? { slug: model.providerId } : { id: model.providerId }),
         display_name: model.label,
@@ -153,6 +155,7 @@ export async function refreshOpenAIModelAccess(options: CatalogOptions = {}) {
         context_window: model.contextWindow,
         supported_reasoning_levels: model.efforts.filter(effort => effort !== 'auto').map(effort => ({ effort })),
         visibility: model.showInPicker ? 'list' : 'hide',
+        ...(model.instructions ? { base_instructions: model.instructions } : {}),
       })),
     };
     fetchedAt = entry.fetchedAt;

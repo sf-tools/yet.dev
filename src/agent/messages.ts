@@ -15,6 +15,7 @@ export type AgentChatMessage = {
   content: AgentContent;
   phase?: 'commentary' | 'final_answer';
   interAgent?: { triggerTurn: boolean };
+  instructionContext?: 'repository';
 };
 
 export type AgentToolCallMessage = {
