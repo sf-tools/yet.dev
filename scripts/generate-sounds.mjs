@@ -16,7 +16,7 @@ const cuelumeEntry = pathToFileURL(`${dependencyDir}/node_modules/cuelume/dist/i
 const outputDir = resolve('src/sounds/assets');
 await mkdir(outputDir, { recursive: true });
 
-for (const name of ['bloom', 'success', 'error', 'chime', 'scan']) {
+for (const name of ['bloom', 'success', 'error', 'scan']) {
   const sampleRate = 44100;
   const context = new OfflineAudioContext(1, sampleRate * 3, sampleRate);
   // Schedule Cuelume synchronously before starting the offline render.

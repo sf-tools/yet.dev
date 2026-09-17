@@ -6,10 +6,9 @@ import { join } from 'node:path';
 import bloom from './assets/bloom.wav';
 import success from './assets/success.wav';
 import error from './assets/error.wav';
-import chime from './assets/chime.wav';
 import scan from './assets/scan.wav';
 
-const sounds = { bloom, success, error, chime, scan };
+const sounds = { bloom, success, error, scan };
 export type SoundName = keyof typeof sounds;
 const files = new Map<SoundName, Promise<string>>();
 

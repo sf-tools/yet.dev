@@ -1,4 +1,4 @@
-These five cues are rendered from [Cuelume](https://github.com/Danilaa1/cuelume)
+These four cues are rendered from [Cuelume](https://github.com/Danilaa1/cuelume)
 0.2.2, by Daniel Belyi, under the included MIT license. The upstream synthesis,
 gain, envelopes, and echo are preserved in mono 44.1 kHz, 16-bit PCM WAV files.
 

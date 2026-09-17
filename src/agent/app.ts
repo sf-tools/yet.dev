@@ -713,10 +713,7 @@ export class AgentApp {
     });
     this.tools = createToolRegistry({
       workspaceRoot: process.cwd(),
-      execCommand: (command, execOptions) => {
-        this.playSound('chime');
-        return this.backgroundTerminals.exec(command, execOptions);
-      },
+      execCommand: (command, execOptions) => this.backgroundTerminals.exec(command, execOptions),
       writeStdin: (sessionId, chars, writeOptions) =>
         this.backgroundTerminals.write(sessionId, chars, writeOptions),
       authorize: (request, authorization) => this.authorizeTool(request, authorization),
@@ -3139,7 +3136,6 @@ export class AgentApp {
       const profile = resolvePermissionProfile(this.state.permissionMode, {
         readOnly: this.state.planningMode,
       });
-      this.playSound('chime');
       const result = await runUserShell(cmd, {
         workspaceRoot: process.cwd(),
         cwd: process.cwd(),
