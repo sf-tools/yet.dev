@@ -30,6 +30,7 @@ import { renderHistoryEntry } from '@/render/components/entry';
 import { preloadSyntaxLanguages } from '@/render/markdown';
 import {
   commandActivityIsRunning,
+  isExplorationEntry,
   isCommandToolEntry,
   renderCommandActivity,
 } from '@/render/components/tools/command-activity';
@@ -188,9 +189,10 @@ function agentStatusLabel(status: ReturnType<AgentControl['navigationAgents']>[n
   return 'errored';
 }
 
-function commandActivityEnd(entries: HistoryEntry[], start: number) {
-  let end = start;
-  while (end < entries.length && isCommandHistoryEntry(entries[end])) end += 1;
+function commandActivityEnd(entries: HistoryEntry[], start: number, showCommandSummaries = false) {
+  let end = start + 1;
+  if (showCommandSummaries || !isExplorationEntry(entries[start] as ToolHistoryEntry)) return end;
+  while (end < entries.length && isCommandHistoryEntry(entries[end]) && isExplorationEntry(entries[end] as ToolHistoryEntry)) end += 1;
   return end;
 }
 
@@ -460,10 +462,10 @@ export class AgentApp {
       const index = this.committedHistoryCount;
       const entry = this.state.historyEntries[index];
       if (isCommandHistoryEntry(entry)) {
-        const end = commandActivityEnd(this.state.historyEntries, index);
+        const end = commandActivityEnd(this.state.historyEntries, index, this.state.showCommandSummaries);
         const commands = this.state.historyEntries.slice(index, end) as ToolHistoryEntry[];
         if (commandActivityIsRunning(commands)) break;
-        if (this.state.busy && end === this.state.historyEntries.length) break;
+        if (this.state.busy && end === this.state.historyEntries.length && !this.state.showCommandSummaries && isExplorationEntry(commands[0])) break;
         appendCell(serializeBlock(renderCommandActivity(commands, ctx, {
           showCommandSummaries: this.state.showCommandSummaries,
         })));
@@ -508,7 +510,7 @@ export class AgentApp {
     for (let index = this.committedHistoryCount; index < this.state.historyEntries.length;) {
       const entry = this.state.historyEntries[index];
       if (isCommandHistoryEntry(entry)) {
-        const end = commandActivityEnd(this.state.historyEntries, index);
+        const end = commandActivityEnd(this.state.historyEntries, index, this.state.showCommandSummaries);
         appendCell(
           renderCommandActivity(
             this.state.historyEntries.slice(index, end) as ToolHistoryEntry[],

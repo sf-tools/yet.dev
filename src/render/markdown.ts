@@ -6,6 +6,7 @@ import Prism from 'prismjs';
 import { repeat, truncateToWidth, widthOf } from '@/text';
 import { indent, prefixWidth } from './layout';
 import { blankLine, line, span } from './primitives';
+import { highlightShell } from './shell-highlight';
 import {
   hideWebLinkDestination,
   osc8Hyperlink,
@@ -423,6 +424,7 @@ export function highlightedCodeLines(
   width = Number.POSITIVE_INFINITY,
 ) {
   if (!language || exceedsSyntaxHighlightLimits(code)) return null;
+  if (language === 'bash') return highlightShell(code, ctx).flatMap(entry => wrapStyledLine(entry, width));
 
   const grammar = (Prism.languages as Record<string, Prism.Grammar | undefined>)[language];
   if (!grammar) return null;
@@ -430,6 +432,51 @@ export function highlightedCodeLines(
   const pieces: InlinePiece[] = [];
   appendPrismToken(pieces, Prism.tokenize(code, grammar), ctx);
   return wrapInlinePieces(pieces, width);
+}
+
+export function wrapStyledLine(entry: StyledLine, width: number) {
+  if (!Number.isFinite(width)) return [entry];
+  const atoms = entry.segments.flatMap(segment => Array.from(segment.text, text => ({
+    text, style: segment.style, width: widthOf(text),
+  })));
+  const result: StyledLine[] = [];
+  let current: typeof atoms = [];
+  let pending: typeof atoms = [];
+  let used = 0;
+  const flush = () => {
+    const segments: Segment[] = [];
+    for (const atom of current) {
+      const previous = segments.at(-1);
+      if (previous && previous.style === atom.style) previous.text += atom.text;
+      else segments.push(span(atom.text, atom.style));
+    }
+    result.push(line(...segments));
+    current = [];
+    used = 0;
+  };
+  width = Math.max(1, width);
+  for (let start = 0; start < atoms.length;) {
+    const whitespace = /\s/.test(atoms[start].text);
+    let end = start + 1;
+    while (end < atoms.length && /\s/.test(atoms[end].text) === whitespace) end += 1;
+    const word = atoms.slice(start, end);
+    start = end;
+    if (whitespace) { pending = word; continue; }
+    const wordWidth = word.reduce((sum, atom) => sum + atom.width, 0);
+    const spaceWidth = pending.reduce((sum, atom) => sum + atom.width, 0);
+    if (current.length && used + spaceWidth + wordWidth > width) {
+      flush();
+      pending = [];
+    }
+    for (const atom of [...pending, ...word]) {
+      if (current.length && used + atom.width > width) flush();
+      current.push(atom);
+      used += atom.width;
+    }
+    pending = [];
+  }
+  if (current.length || !result.length) flush();
+  return result;
 }
 
 export function highlightedCodeBlock(

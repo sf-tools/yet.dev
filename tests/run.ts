@@ -10,6 +10,7 @@ await import('./models.test');
 await import('./instructions.test');
 await import('./commands.test');
 await import('./rendering.test');
+await import('./command-activity.test');
 await import('./cli.test');
 await import('./tools.test');
 await import('./titles.test');

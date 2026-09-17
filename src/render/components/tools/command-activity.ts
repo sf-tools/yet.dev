@@ -1,10 +1,11 @@
 import chalk from 'chalk';
 
-import { highlightedCodeBlock } from '@/render/markdown';
+import { highlightedCodeBlock, wrapStyledLine } from '@/render/markdown';
+import { parseCommand, type ParsedCommand } from '@/agent/parse-command';
 import { wrapAnsiLine } from '@/render/ansi';
 import { indent, LEFT_MARGIN, wrapTextBlock } from '@/render/layout';
 import { blankLine, line, span } from '@/render/primitives';
-import { truncateToWidth, widthOf } from '@/text';
+import { widthOf } from '@/text';
 import type { ToolHistoryEntry } from '@/types';
 import type { Block, RenderContext } from '@/render/types';
 import { asRecord, stringProp } from './shared';
@@ -16,66 +17,6 @@ type CommandResult = {
   wallTimeSeconds?: number;
   error?: string;
 };
-
-type ParsedCommand =
-  | { kind: 'read'; name: string; path?: string }
-  | { kind: 'list'; path?: string }
-  | { kind: 'search'; query: string; path?: string };
-
-function shellWords(command: string) {
-  const words: string[] = [];
-  const pattern = /"((?:\\.|[^"\\])*)"|'([^']*)'|([^\s]+)/g;
-  for (const match of command.matchAll(pattern)) words.push(match[1] ?? match[2] ?? match[3]);
-  return words;
-}
-
-function nonOption(words: string[], start = 1) {
-  return words.slice(start).filter(word => !word.startsWith('-'));
-}
-
-function parseExplorationCommand(command: string): ParsedCommand | null {
-  if (/[;&|]\s*(?!$)/.test(command) || command.includes('\n')) return null;
-  const words = shellWords(command.trim());
-  if (words.length === 0) return null;
-  const executable = words[0].split('/').pop() || words[0];
-
-  if (['cat', 'bat', 'less'].includes(executable)) {
-    const paths = nonOption(words);
-    if (paths.length === 0) return null;
-    return { kind: 'read', name: paths.join(', '), path: paths[0] };
-  }
-  if (['head', 'tail'].includes(executable)) {
-    const paths = nonOption(words).filter(word => !/^\d+$/.test(word));
-    if (paths.length === 0) return null;
-    return { kind: 'read', name: paths.join(', '), path: paths[0] };
-  }
-  if (executable === 'sed') {
-    const paths = nonOption(words).filter(word => !/^\d*(?:,\d*)?[pqd]$/.test(word));
-    const path = paths.at(-1);
-    return path ? { kind: 'read', name: path, path } : null;
-  }
-  if (executable === 'git' && words[1] === 'show') {
-    const target = nonOption(words, 2).at(-1);
-    return target ? { kind: 'read', name: target, path: target } : null;
-  }
-  if (['ls', 'tree'].includes(executable)) {
-    const path = nonOption(words).at(-1);
-    return { kind: 'list', ...(path ? { path } : {}) };
-  }
-  if (executable === 'find' || executable === 'fd' || (executable === 'rg' && words.includes('--files'))) {
-    const path = executable === 'find' ? nonOption(words).at(0) : nonOption(words).at(-1);
-    return { kind: 'list', ...(path && path !== '--files' ? { path } : {}) };
-  }
-  if (['rg', 'grep', 'ag'].includes(executable) || (executable === 'git' && words[1] === 'grep')) {
-    const offset = executable === 'git' ? 2 : 1;
-    const args = nonOption(words, offset);
-    const query = args[0];
-    if (!query) return null;
-    const path = args[1];
-    return { kind: 'search', query, ...(path ? { path } : {}) };
-  }
-  return null;
-}
 
 export function isCommandToolEntry(entry: ToolHistoryEntry) {
   return ['exec_command', 'write_stdin'].includes(entry.toolName);
@@ -116,6 +57,13 @@ function parseResult(entry: ToolHistoryEntry): CommandResult {
   return { output: raw.trimEnd() };
 }
 
+export function isExplorationEntry(entry: ToolHistoryEntry) {
+  if (entry.toolName !== 'exec_command' || entry.status === 'failed') return false;
+  const result = parseResult(entry);
+  return !result.error && (result.exitCode === undefined || result.exitCode === 0) &&
+    parseCommand(commandText(entry)).every(command => command.type !== 'unknown');
+}
+
 function shellCommandLine(command: string, ctx: RenderContext, prefix: '$ ' | ''): Block {
   const availableWidth = Math.max(
     1,
@@ -144,17 +92,26 @@ function statusLine(result: CommandResult, ctx: RenderContext) {
   );
 }
 
-function commandOutputLines(text: string, maxLines = 5) {
-  const lines = text ? text.split('\n') : ['(no output)'];
-  if (lines.length <= maxLines) return lines;
-  const hidden = lines.length - (maxLines - 1);
-  const headCount = Math.ceil((maxLines - 1) / 2);
-  const tailCount = Math.floor((maxLines - 1) / 2);
-  return [
-    ...lines.slice(0, headCount),
-    `… +${hidden} lines (ctrl + t to view transcript)`,
-    ...lines.slice(lines.length - tailCount),
-  ];
+function commandOutputLines(text: string, width: number, maxLines = 5) {
+  const source = text ? text.split('\n') : ['(no output)'];
+  const omitted = Math.max(0, source.length - maxLines * 2);
+  const retained = omitted ? [...source.slice(0, maxLines), ...source.slice(-maxLines)] : source;
+  const wrapped = retained.flatMap(text => wrapAnsiLine(text, width, true));
+  if (!omitted && wrapped.length <= maxLines) return wrapped;
+  let hidden = omitted + wrapped.length - (maxLines - 1);
+  let hint = wrapAnsiLine(`… +${hidden} lines (ctrl + t to view transcript)`, width, true);
+  let available = Math.max(0, maxLines - hint.length);
+  // Reserve rows for the hint after wrapping, as Codex does on narrow terminals.
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    hidden = omitted + wrapped.length - available;
+    hint = wrapAnsiLine(`… +${hidden} lines (ctrl + t to view transcript)`, width, true);
+    const next = Math.max(0, maxLines - hint.length);
+    if (next === available) break;
+    available = next;
+  }
+  const head = Math.floor(available / 2);
+  const tail = available - head;
+  return [...wrapped.slice(0, head), ...hint, ...(tail ? wrapped.slice(-tail) : [])];
 }
 
 function compactCommand(
@@ -164,51 +121,39 @@ function compactCommand(
   ctx: RenderContext,
   failed = false,
 ): Block {
-  const commandLines = command.split('\n').map(text => text.trim()).filter(Boolean);
-  const visibleCommandLines = commandLines.length <= 4
-    ? commandLines
-    : [...commandLines.slice(0, 3), `… +${commandLines.length - 3} lines`];
-  const available = Math.max(1, ctx.width - 5 - widthOf(label));
-  const commandPreview = truncateToWidth(visibleCommandLines[0] ?? command.trim(), available);
+  const highlighted = highlightedCodeBlock(command, 'bash', ctx);
+  const available = Math.max(1, ctx.width - widthOf(LEFT_MARGIN) - 3 - widthOf(label));
+  const [first, ...firstRest] = wrapStyledLine(highlighted[0] ?? line(), available);
+  const continuation = [
+    ...firstRest,
+    ...highlighted.slice(1).flatMap(entry => wrapStyledLine(entry, Math.max(1, ctx.width - widthOf(LEFT_MARGIN) - 4))),
+  ];
   const block: Block = [
     line(
       span('• ', failed ? chalk.red.bold : label === 'Ran' ? chalk.green.bold : ctx.theme.dimmed),
       span(label, chalk.bold),
       span(' '),
-      span(commandPreview),
+      ...first.segments,
     ),
   ];
-  visibleCommandLines.slice(1).forEach(commandLine => {
-    block.push(
-      line(
-        span('  │ ', ctx.theme.dimmed),
-        span(truncateToWidth(commandLine, Math.max(1, ctx.width - 4))),
-      ),
-    );
+  continuation.slice(0, 2).forEach(entry => {
+    block.push(line(span('  │ ', chalk.dim), ...entry.segments));
   });
-  const outputLines = commandOutputLines(output);
+  if (continuation.length > 2) block.push(line(span(`  │ … +${continuation.length - 2} lines`, chalk.dim)));
+  const outputLines = commandOutputLines(output, Math.max(1, ctx.width - widthOf(LEFT_MARGIN) - 4));
   let firstOutputLine = true;
-  outputLines.forEach(text => {
-    const wrapped = wrapAnsiLine(
-      text,
-      Math.max(1, ctx.width - 4),
-      true,
-    );
-    for (const outputLine of wrapped) {
-      block.push(
-        line(
-          span(firstOutputLine ? '  └ ' : '    ', ctx.theme.dimmed),
-          ...outputLine.segments,
-        ),
-      );
-      firstOutputLine = false;
-    }
+  outputLines.forEach(outputLine => {
+    block.push(line(
+      span(firstOutputLine ? '  └ ' : '    ', chalk.dim),
+      ...outputLine.segments,
+    ));
+    firstOutputLine = false;
   });
   return block;
 }
 
 function renderExploration(
-  commands: Array<{ parsed: ParsedCommand; running: boolean }>,
+  commands: Array<{ parsed: ParsedCommand[]; running: boolean }>,
   ctx: RenderContext,
 ): Block {
   const running = commands.some(command => command.running);
@@ -218,29 +163,35 @@ function renderExploration(
       span(running ? 'Exploring' : 'Explored', chalk.bold),
     ),
   ];
-  commands.forEach(({ parsed }, index) => {
-    const prefix = index === 0 ? '  └ ' : '    ';
-    if (parsed.kind === 'read') {
-      block.push(line(span(prefix, ctx.theme.dimmed), span('Read ', chalk.cyanBright), span(parsed.name)));
-    } else if (parsed.kind === 'list') {
-      block.push(
-        line(
-          span(prefix, ctx.theme.dimmed),
-          span('List', chalk.cyanBright),
-          ...(parsed.path ? [span(' '), span(parsed.path)] : []),
-        ),
-      );
+  const rows: Array<{ title: string; segments: ReturnType<typeof span>[] }> = [];
+  for (let index = 0; index < commands.length;) {
+    const reads = (command: typeof commands[number]) => command.parsed.every(parsed => parsed.type === 'read');
+    if (reads(commands[index])) {
+      const names = new Set<string>();
+      do {
+        for (const parsed of commands[index].parsed) if (parsed.type === 'read') names.add(parsed.name);
+        index += 1;
+      } while (index < commands.length && reads(commands[index]));
+      rows.push({ title: 'Read', segments: [...names].flatMap((name, i) => i ? [span(', ', chalk.dim), span(name)] : [span(name)]) });
     } else {
-      block.push(
-        line(
-          span(prefix, ctx.theme.dimmed),
-          span('Search ', chalk.cyanBright),
-          span(parsed.query),
-          ...(parsed.path ? [span(' in '), span(parsed.path)] : []),
-        ),
-      );
+      for (const parsed of commands[index++].parsed) {
+        if (parsed.type === 'read') rows.push({ title: 'Read', segments: [span(parsed.name)] });
+        else if (parsed.type === 'list_files') rows.push({ title: 'List', segments: [span(parsed.path ?? parsed.cmd)] });
+        else if (parsed.type === 'search') rows.push({ title: 'Search', segments: parsed.query === null
+          ? [span(parsed.cmd)]
+          : [span(parsed.query), ...(parsed.path === null ? [] : [span(' in ', chalk.dim), span(parsed.path)])] });
+      }
     }
-  });
+  }
+  for (const row of rows) {
+    const prefix = `${row.title} `;
+    const wrapped = wrapStyledLine(line(...row.segments), Math.max(1, ctx.width - widthOf(LEFT_MARGIN) - 4 - widthOf(prefix)));
+    wrapped.forEach((entry, index) => block.push(line(
+      span(block.length === 1 ? '  └ ' : '    ', chalk.dim),
+      span(index === 0 ? prefix : ' '.repeat(widthOf(prefix)), index === 0 ? chalk.cyan : undefined),
+      ...entry.segments,
+    )));
+  }
   return block;
 }
 
@@ -305,7 +256,7 @@ export function renderCommandActivity(
       result: initial,
       failed,
       running,
-      parsed: parseExplorationCommand(commandText(entry)),
+      parsed: parseCommand(commandText(entry)),
     };
   });
 
@@ -335,60 +286,32 @@ export function renderCommandActivity(
   }
 
   if (commands.length === 0 && writes.length === 0) return [];
-  const completed = commands.filter(command => !command.running && !command.failed);
-  const running = commands.filter(command => command.running);
-  const failed = commands.filter(command => command.failed);
   const block: Block = [];
-
-  const exploration = !options.showCommandSummaries && commands.length > 0 && writes.length === 0 && commands.every(command =>
-    command.parsed && !command.failed,
-  );
-  if (exploration) {
-    return indent(
-      renderExploration(
-        commands.map(command => ({ parsed: command.parsed!, running: command.running })),
-        ctx,
-      ),
-      LEFT_MARGIN,
-    );
-  }
-
-  if (options.showCommandSummaries) {
-    completed.forEach((command, index) => {
-      if (index > 0) block.push(blankLine());
-      block.push(...compactCommand('Ran', command.command, command.result.output, ctx));
-    });
-  } else if (completed.length === 1 && commands.length === 1 && writes.length === 0) {
-    const command = completed[0];
-    block.push(...compactCommand('Ran', command.command, command.result.output, ctx));
-  } else if (completed.length > 0) {
-    block.push(
-      line(
-        span('•', chalk.green.bold),
-        span(' '),
-        span(`Ran ${completed.length} command${completed.length === 1 ? '' : 's'}`, chalk.bold),
-        span(' · ctrl + t to view transcript', ctx.theme.dimmed),
-      ),
-    );
-  }
-
-  for (const command of running) {
-    block.push(...compactCommand('Running', command.command, command.result.output, ctx));
-  }
-  for (const command of failed) {
-    block.push(
-      ...compactCommand(
-        'Ran',
-        command.command,
-        command.result.error || command.result.output,
-        ctx,
-        true,
-      ),
-    );
-  }
-  writes.forEach(entry => {
+  let commandIndex = 0;
+  let exploration: typeof commands = [];
+  const append = (cell: Block) => {
     if (block.length > 0) block.push(blankLine());
-    block.push(...renderInteraction(entry, ctx));
-  });
+    block.push(...cell);
+  };
+  const flushExploration = () => {
+    if (exploration.length) append(renderExploration(exploration, ctx));
+    exploration = [];
+  };
+  for (const entry of entries) {
+    if (entry.toolName === 'write_stdin') {
+      flushExploration();
+      append(renderInteraction(entry, ctx));
+      continue;
+    }
+    const command = commands[commandIndex++];
+    if (!options.showCommandSummaries && !command.failed && command.parsed.every(parsed => parsed.type !== 'unknown')) {
+      exploration.push(command);
+    } else {
+      flushExploration();
+      append(compactCommand(command.running ? 'Running' : 'Ran', command.command,
+        command.result.error || command.result.output, ctx, command.failed));
+    }
+  }
+  flushExploration();
   return indent(block, LEFT_MARGIN);
 }

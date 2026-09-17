@@ -277,8 +277,8 @@ try {
 }
 equal(
   serializeBlock(renderCommandActivity(commandHistory, renderContext)).join('\n'),
-  ' • Ran 2 commands · ctrl + t to view transcript',
-  'completed command groups collapse to the Codex transcript summary',
+  ' • Ran printf first\n   └ first\n \n • Ran printf second\n   └ second',
+  'completed ordinary commands retain individual Codex output cells',
 );
 const expandedCommandSummaries = serializeBlock(renderCommandActivity(
   commandHistory,
@@ -315,7 +315,7 @@ const renderedExploration = serializeBlock(
 check(
   renderedExploration.includes('• Explored') &&
     renderedExploration.includes('Search update_plan in src') &&
-    renderedExploration.includes('Read src/tools/index.ts'),
+    renderedExploration.includes('Read index.ts'),
   'read and search commands collapse into the Codex Explored cell',
 );
 const expandedExploration = serializeBlock(renderCommandActivity(
