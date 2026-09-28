@@ -1,3 +1,2 @@
-# Yet
-
-Your best work is yet to come.
+Yet another coding agent.
+*Except it doesn't stop until it's done.*
